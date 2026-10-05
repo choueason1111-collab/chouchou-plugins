@@ -1,0 +1,18 @@
+# Build output (and JUCE / ARA SDK downloaded by the GitHub build)
+_deps/
+dist/
+build/
+build_*/
+Builds/*/build/
+xcuserdata/
+*.xcuserdatad/
+.DS_Store
+
+# Not part of the shared plugins
+_backup_*/
+chochou audition tools/
+
+# Old packaged copies of built plugins inside chouchouEQgate
+*.zip
+chouchouEQgate/cohuchou plugin/
+chouchouEQgate/chouchouPlugins 2/

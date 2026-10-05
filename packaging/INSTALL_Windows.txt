@@ -1,0 +1,28 @@
+chouchou plugins - Windows (64-bit)
+===================================
+
+安裝（中文）
+1. 把 VST3 資料夾裡的每個 .vst3 複製到：
+       C:\Program Files\Common Files\VST3
+   （需要系統管理員權限）
+2. 重新開啟 DAW，讓它重新掃描插件。
+3. Standalone 資料夾裡的 .exe 不用 DAW 也能直接執行。
+   chouchouPlugplugin / chouchouPlugplugin2（插件機架）在 DAW 裡要能載入其他插件，
+   必須把對應的 .exe 放到：
+       C:\Program Files\chouchou\
+   因為它們會用這個 .exe 在另一個程序裡掃描插件，掃到會當機的插件時才不會連 DAW 一起當掉。
+4. 第一次執行 .exe 時，Windows 可能顯示「Windows 已保護您的電腦」：
+   按「其他資訊」→「仍要執行」。這是因為程式沒有付費的程式碼簽章，不代表有病毒。
+
+Install (English)
+1. Copy every .vst3 from the VST3 folder to:
+       C:\Program Files\Common Files\VST3
+   (administrator rights needed)
+2. Restart your DAW so it rescans plugins.
+3. The .exe files in the Standalone folder run without a DAW.
+   For chouchouPlugplugin / chouchouPlugplugin2 (plugin racks) to load other plugins inside a DAW,
+   put the matching .exe in:
+       C:\Program Files\chouchou\
+   They scan plugins in that separate process, so a crashing plugin cannot take the DAW down.
+4. On first launch Windows may say "Windows protected your PC":
+   click "More info" -> "Run anyway". The programs are not code-signed; this is not a virus warning.

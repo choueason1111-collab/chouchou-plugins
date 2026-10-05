@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<JUCERPROJECT id="cTmb01" name="chouchouEQtimbre" projectType="audioplug" useAppConfig="0"
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
+              pluginName="chouchouEQtimbre" pluginDesc="Even / odd harmonic rendering"
+              pluginManufacturer="chouchou" pluginManufacturerCode="ChoU"
+              pluginCode="cTmb" pluginFormats="buildVST3,buildAU,buildStandalone"
+              pluginCharacteristicsValue="pluginWantsMidiIn" companyName="chouchou"
+              companyCode="ChoU" bundleIdentifier="com.chouchou.chouchouEQtimbre"
+              pluginAUExportPrefix="chouchouEQtimbreAU" pluginAUMainType="'aumf'"
+              pluginVST3Category="Fx,Distortion" cppLanguageStandard="17" version="1.0.0">
+  <MAINGROUP id="cTmSrc" name="chouchouEQtimbre">
+    <GROUP id="{7A3E1C20-5B41-4D6F-9C2A-1E8B3F4D5C60}" name="Source">
+      <FILE id="cTmPrc" name="PluginProcessor.cpp" compile="1" resource="0"
+            file="Source/PluginProcessor.cpp"/>
+      <FILE id="cTmPrh" name="PluginProcessor.h" compile="0" resource="0"
+            file="Source/PluginProcessor.h"/>
+      <FILE id="cTmEdc" name="PluginEditor.cpp" compile="1" resource="0"
+            file="Source/PluginEditor.cpp"/>
+      <FILE id="cTmEdh" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
+      <FILE id="cTmGen" name="HarmonicGenerator.h" compile="0" resource="0"
+            file="Source/HarmonicGenerator.h"/>
+      <FILE id="cTmReb" name="HarmonicRebalancer.h" compile="0" resource="0"
+            file="Source/HarmonicRebalancer.h"/>
+      <FILE id="cTmPit" name="PitchSource.h" compile="0" resource="0" file="Source/PitchSource.h"/>
+      <FILE id="cTmAna" name="HarmonicAnalyzer.h" compile="0" resource="0"
+            file="Source/HarmonicAnalyzer.h"/>
+      <FILE id="cTmBiq" name="Biquad.h" compile="0" resource="0" file="Source/Biquad.h"/>
+      <FILE id="cTmVoi" name="EngineVoice.h" compile="0" resource="0" file="Source/EngineVoice.h"/>
+      <FILE id="cTmRnd" name="Randomizer.h" compile="0" resource="0" file="Source/Randomizer.h"/>
+      <FILE id="cTmMdl" name="TimbreModel.h" compile="0" resource="0" file="Source/TimbreModel.h"/>
+    </GROUP>
+  </MAINGROUP>
+  <MODULES>
+    <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_devices" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_formats" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_plugin_client" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="1"/>
+    <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_processors_headless" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="1"/>
+    <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_dsp" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+  </MODULES>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_VST3_CAN_REPLACE_VST2="0"
+               JUCE_WEB_BROWSER="0" JUCE_USE_CURL="0"/>
+  <EXPORTFORMATS>
+    <XCODE_MAC targetFolder="Builds/MacOSX">
+      <CONFIGURATIONS>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="chouchouEQtimbre"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="chouchouEQtimbre"/>
+      </CONFIGURATIONS>
+      <MODULEPATHS>
+        <MODULEPATH id="juce_audio_basics" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_devices" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_formats" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_plugin_client" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors_headless" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_utils" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_core" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_data_structures" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_dsp" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_events" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_graphics" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_gui_basics" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_gui_extra" path="~/JUCE/modules"/>
+      </MODULEPATHS>
+    </XCODE_MAC>
+  </EXPORTFORMATS>
+</JUCERPROJECT>

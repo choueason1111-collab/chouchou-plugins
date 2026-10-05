@@ -1,0 +1,35 @@
+Param boostAtk(0.3);
+Param boostRel(0.08);
+Param grAtk(0.4);
+Param grRel(0.1);
+Param lowDb(-50);
+Param highDb(-18);
+Param upRatio(2);
+Param downRatio(4);
+Param mix(1);
+Param makeupDb(0);
+History boostG(1);
+History grG(1);
+
+// Match JUCE: UI lowDb/highDb are dBFS. Max fftin~ @2048 raw amp ≈ N/4 = 512 for FS sine.
+spectralFS = 512;
+noiseFloorDb = -90;
+amp, phase = cartopol(in1, in2);
+mag = max(amp, 1e-8);
+lowLin = pow(10, lowDb * 0.05) * spectralFS;
+highLin = pow(10, highDb * 0.05) * spectralFS;
+noiseLin = pow(10, noiseFloorDb * 0.05) * spectralFS;
+magDbFs = 20 * log10(max(mag / spectralFS, 1e-8));
+upSlope = 1 - 1 / max(upRatio, 1);
+dnSlope = 1 - 1 / max(downRatio, 1);
+// Boost only between noise floor and low thresh (never expand empty bins).
+boostTarget = (mag >= noiseLin && mag < lowLin) ? pow(10, ((lowDb - magDbFs) * upSlope) * 0.05) : 1;
+grTarget = (mag > highLin) ? pow(10, ((highDb - magDbFs) * dnSlope) * 0.05) : 1;
+boostTarget = clip(boostTarget, 1, 32);
+grTarget = clip(grTarget, 1e-4, 1);
+bCoeff = (boostTarget > boostG) ? boostAtk : boostRel;
+boostG = boostG + bCoeff * (boostTarget - boostG);
+gCoeff = (grTarget < grG) ? grAtk : grRel;
+grG = grG + gCoeff * (grTarget - grG);
+gain = (1 - mix) + mix * (boostG * grG * pow(10, makeupDb * 0.05));
+out1, out2 = poltocar(amp * gain, phase);

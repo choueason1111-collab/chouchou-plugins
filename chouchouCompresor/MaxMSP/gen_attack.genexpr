@@ -1,0 +1,6 @@
+Param ca(0.5);
+History env(0);
+x = in1;
+// attack only: smooth when rising, hold when falling
+env = (x > env) ? (env + ca * (x - env)) : env;
+out1 = env;

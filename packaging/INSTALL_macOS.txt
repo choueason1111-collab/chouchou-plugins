@@ -1,0 +1,20 @@
+chouchou plugins - macOS 11 or later (Apple Silicon and Intel)
+==============================================================
+
+安裝（中文）
+1. 把 AU 資料夾裡的 .component 複製到：   ~/Library/Audio/Plug-Ins/Components
+   把 VST3 資料夾裡的 .vst3 複製到：       ~/Library/Audio/Plug-Ins/VST3
+   （在 Finder 按 Cmd+Shift+G 貼上路徑即可前往）
+2. 這些插件沒有經過 Apple 公證，macOS 會擋下來。打開「終端機」執行：
+       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins
+   Standalone 的 .app 第一次打開時，請按右鍵 →「打開」。
+3. 重新開啟 DAW，讓它重新掃描插件。
+
+Install (English)
+1. Copy the .component files from the AU folder to:   ~/Library/Audio/Plug-Ins/Components
+   Copy the .vst3 files from the VST3 folder to:       ~/Library/Audio/Plug-Ins/VST3
+   (in Finder, Cmd+Shift+G and paste the path)
+2. The plugins are not notarized by Apple, so macOS blocks them. In Terminal run:
+       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins
+   For the Standalone .app, right-click -> Open the first time.
+3. Restart your DAW so it rescans plugins.

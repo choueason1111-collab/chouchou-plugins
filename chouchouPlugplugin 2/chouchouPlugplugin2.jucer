@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<JUCERPROJECT id="cPlgju" name="chouchouPlugplugin2" projectType="audioplug" useAppConfig="0"
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
+              pluginName="chouchouPlugplugin2" pluginDesc="10-slot serial rack with ARA host — Audition clip via processBlock capture"
+              pluginManufacturer="chouchou" pluginManufacturerCode="ChoU"
+              pluginCode="cPg2" pluginVST3Category="Fx,Tools" pluginFormats="buildVST3,buildAU,buildStandalone"
+              pluginCharacteristicsValue="pluginEditorRequiresKeys"
+              companyName="chouchou" companyCode="ChoU"
+              bundleIdentifier="com.chouchou.chouchouPlugplugin2"
+              pluginAUExportPrefix="chouchouPlugplugin2AU" version="1.0.0">
+  <MAINGROUP id="cPlgSrc" name="chouchouPlugplugin2">
+    <GROUP id="{C0C0C0C0-C0C1-C0C2-C0C3-C0C0C0C0C0C2}" name="Source">
+      <FILE id="cPlgPrc" name="PluginProcessor.cpp" compile="1" resource="0"
+            file="Source/PluginProcessor.cpp"/>
+      <FILE id="cPlgPrh" name="PluginProcessor.h" compile="0" resource="0"
+            file="Source/PluginProcessor.h"/>
+      <FILE id="cPlgEdc" name="PluginEditor.cpp" compile="1" resource="0"
+            file="Source/PluginEditor.cpp"/>
+      <FILE id="cPlgEdh" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
+      <FILE id="cPlgScn" name="PluginScanSupport.cpp" compile="1" resource="0"
+            file="Source/PluginScanSupport.cpp"/>
+      <FILE id="cPlgSch" name="PluginScanSupport.h" compile="0" resource="0"
+            file="Source/PluginScanSupport.h"/>
+      <FILE id="cPlgSta" name="StandaloneApp.cpp" compile="1" resource="0"
+            file="Source/StandaloneApp.cpp"/>
+      <FILE id="cPlgAra" name="ARAHostSupport.cpp" compile="1" resource="0"
+            file="Source/ARAHostSupport.cpp"/>
+      <FILE id="cPlgArh" name="ARAHostSupport.h" compile="0" resource="0"
+            file="Source/ARAHostSupport.h"/>
+      <FILE id="cPlgArb" name="ARAPluginHostBase.h" compile="0" resource="0"
+            file="Source/ARAPluginHostBase.h"/>
+    </GROUP>
+  </MAINGROUP>
+  <MODULES>
+    <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_devices" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_formats" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_plugin_client" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="1"/>
+    <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_processors_headless" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="1"/>
+    <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+  </MODULES>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_VST3_CAN_REPLACE_VST2="0"
+               JUCE_PLUGINHOST_VST3="1" JUCE_PLUGINHOST_AU="1" JUCE_PLUGINHOST_VST="0" JUCE_PLUGINHOST_ARA="1"
+               JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP="1"/>
+  <EXPORTFORMATS>
+    <XCODE_MAC targetFolder="Builds/MacOSX" araFolder="~/SDKs/ARA_SDK">
+      <CONFIGURATIONS>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="chouchouPlugplugin2"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="chouchouPlugplugin2"/>
+      </CONFIGURATIONS>
+      <MODULEPATHS>
+        <MODULEPATH id="juce_audio_basics" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_devices" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_formats" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_plugin_client" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors_headless" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_utils" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_core" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_data_structures" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_events" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_graphics" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_gui_basics" path="~/JUCE/modules"/>
+        <MODULEPATH id="juce_gui_extra" path="~/JUCE/modules"/>
+      </MODULEPATHS>
+    </XCODE_MAC>
+  </EXPORTFORMATS>
+</JUCERPROJECT>

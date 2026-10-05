@@ -1,0 +1,124 @@
+{
+  "patcher": {
+    "fileversion": 1,
+    "appversion": {
+      "major": 8,
+      "minor": 5,
+      "revision": 0,
+      "architecture": "x64",
+      "modernui": 1
+    },
+    "classnamespace": "dsp.gen",
+    "rect": [
+      60,
+      60,
+      700,
+      520
+    ],
+    "boxes": [
+      {
+        "box": {
+          "id": "in1",
+          "maxclass": "newobj",
+          "numinlets": 0,
+          "numoutlets": 1,
+          "patching_rect": [
+            40,
+            20,
+            35,
+            22
+          ],
+          "text": "in 1",
+          "outlettype": [
+            ""
+          ]
+        }
+      },
+      {
+        "box": {
+          "id": "in2",
+          "maxclass": "newobj",
+          "numinlets": 0,
+          "numoutlets": 1,
+          "patching_rect": [
+            100,
+            20,
+            35,
+            22
+          ],
+          "text": "in 2",
+          "outlettype": [
+            ""
+          ]
+        }
+      },
+      {
+        "box": {
+          "code": "// =============================================================================\n// Chouchou Compressor \u2014 dual-threshold spectral gain (per FFT bin)\n// Paste into a gen~ inside pfft~ (after cartopol~, before poltocar~)\n//\n// in1 = magnitude, in2 = phase\n// out1 = processed magnitude, out2 = phase (unchanged)\n// =============================================================================\n\nParam lowDb(-50);\nParam highDb(-18);\nParam upRatio(2);\nParam downRatio(4);\nParam attackMs(5);\nParam releaseMs(80);\nParam mix(1);\nParam makeupDb(0);\nParam hopMs(11.61);   // = 1000 * (fftsize/overlap) / sr   e.g. 2048/4 @ 44100\n\nHistory env(0);\n\nmag = in1;\nphase = in2;\n\n// --- Attack / Release on magnitude envelope (same as JUCE hop smoother) ---\nhop = max(hopMs, 0.001) * 0.001;\natk = max(attackMs, 0);\nrel = max(releaseMs, 0);\nca = (atk <= 0) ? 1 : (1 - exp(-hop / (atk * 0.001)));\ncr = (rel <= 0) ? 1 : (1 - exp(-hop / (rel * 0.001)));\nc = (mag > env) ? ca : cr;\nenv = env + c * (mag - env);\n\n// --- Dual threshold transfer (dB domain) ---\neps = 1e-8;\nlowLin = pow(10, lowDb * 0.05);\nhighLin = pow(10, highDb * 0.05);\nsafeEnv = max(env, eps);\n\nif (safeEnv < lowLin) {\n    // upward: boost quiet bins toward lowThresh\n    envDb = 20 * log10(safeEnv);\n    slope = 1 - 1 / max(upRatio, 1);\n    gainDb = (lowDb - envDb) * slope;\n    gain = pow(10, gainDb * 0.05);\n} else if (safeEnv > highLin) {\n    // downward: squash loud bins toward highThresh\n    envDb = 20 * log10(safeEnv);\n    slope = 1 - 1 / max(downRatio, 1);\n    gainDb = (highDb - envDb) * slope;\n    gain = pow(10, gainDb * 0.05);\n} else {\n    // dead band \u2014 glue \"pass\" zone\n    gain = 1;\n}\n\ngain = clip(gain, 1e-4, 32);\ngain = (1 - mix) + mix * (gain * pow(10, makeupDb * 0.05));\n\nout1 = mag * gain;\nout2 = phase;\n",
+          "fontface": 0,
+          "fontname": "<Monospaced>",
+          "fontsize": 11.0,
+          "id": "code",
+          "maxclass": "codebox",
+          "numinlets": 1,
+          "numoutlets": 0,
+          "patching_rect": [
+            40.0,
+            60.0,
+            620.0,
+            400.0
+          ]
+        }
+      },
+      {
+        "box": {
+          "id": "out1",
+          "maxclass": "newobj",
+          "numinlets": 1,
+          "numoutlets": 0,
+          "patching_rect": [
+            40,
+            480,
+            42,
+            22
+          ],
+          "text": "out 1",
+          "outlettype": []
+        }
+      },
+      {
+        "box": {
+          "id": "out2",
+          "maxclass": "newobj",
+          "numinlets": 1,
+          "numoutlets": 0,
+          "patching_rect": [
+            100,
+            480,
+            42,
+            22
+          ],
+          "text": "out 2",
+          "outlettype": []
+        }
+      },
+      {
+        "box": {
+          "id": "hint",
+          "maxclass": "comment",
+          "numinlets": 1,
+          "numoutlets": 0,
+          "patching_rect": [
+            200,
+            20,
+            400,
+            30
+          ],
+          "text": "in 1 = mag, in 2 = phase  |  out 1 = new mag, out 2 = phase",
+          "outlettype": []
+        }
+      }
+    ],
+    "lines": []
+  }
+}

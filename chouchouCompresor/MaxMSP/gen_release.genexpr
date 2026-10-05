@@ -1,0 +1,6 @@
+Param cr(0.05);
+History env(0);
+x = in1;
+// release only: follow up instantly, smooth when falling
+env = (x < env) ? (env + cr * (x - env)) : x;
+out1 = env;
