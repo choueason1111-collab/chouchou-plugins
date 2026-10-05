@@ -2259,7 +2259,10 @@ void NewProjectAudioProcessor::pollPendingImport()
             return;
         }
 
-        juce::Timer::callAfterDelay (250, [safe = juce::WeakReference<NewProjectAudioProcessor> (this)]
+        // Built outside the capture list: MSVC reads `this` in a nested lambda's init-capture
+        // as the enclosing lambda.
+        juce::WeakReference<NewProjectAudioProcessor> safe (this);
+        juce::Timer::callAfterDelay (250, [safe]
         {
             if (safe != nullptr)
                 safe->pollPendingImport();

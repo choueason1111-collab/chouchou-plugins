@@ -298,8 +298,10 @@ void SlotRowComponent::openPluginChooser()
 
         // Close chooser first so Insert Basic stays responsive while AU loads async.
         deferDestroyWindow (chooserWindow);
-        juce::MessageManager::callAsync ([safeProc = juce::Component::SafePointer<SlotRowComponent> (this),
-                                          desc, slot = index]
+        // Built outside the capture list: MSVC reads `this` in a nested lambda's init-capture
+        // as the enclosing lambda.
+        juce::Component::SafePointer<SlotRowComponent> safeProc (this);
+        juce::MessageManager::callAsync ([safeProc, desc, slot = index]
         {
             if (safeProc == nullptr)
                 return;

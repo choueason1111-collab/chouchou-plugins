@@ -81,9 +81,10 @@ SlotRowComponent::SlotRowComponent (NewProjectAudioProcessor& proc, int slotInde
                 processor.getDefaultCaptureDirectory(),
                 "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.m4a;*.caf");
 
+            juce::Component::SafePointer<SlotRowComponent> safe (this);
             chooser->launchAsync (
                 juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                [safe = juce::Component::SafePointer<SlotRowComponent> (this), chooser] (const juce::FileChooser& fc)
+                [safe, chooser] (const juce::FileChooser& fc)
                 {
                     if (safe == nullptr)
                         return;
@@ -122,7 +123,8 @@ SlotRowComponent::SlotRowComponent (NewProjectAudioProcessor& proc, int slotInde
 
         editorKeepAlive = processor.getSlotInstanceShared (index);
         araHostWindow = std::make_unique<ClosableWindow> ("ARA Host " + juce::String (index + 1), kPanel);
-        araHostWindow->onClose = [safe = juce::Component::SafePointer<SlotRowComponent> (this)]
+        juce::Component::SafePointer<SlotRowComponent> safe (this);
+        araHostWindow->onClose = [safe]
         {
             if (safe != nullptr)
                 safe->deferDestroyWindow (safe->araHostWindow);
@@ -499,8 +501,10 @@ void SlotRowComponent::openPluginChooser()
 
         // Close chooser first so Insert Basic stays responsive while AU loads async.
         closeChooser();
-        juce::MessageManager::callAsync ([safeProc = juce::Component::SafePointer<SlotRowComponent> (this),
-                                          desc, slot = index]
+        // Built outside the capture list: MSVC reads `this` in a nested lambda's init-capture
+        // as the enclosing lambda.
+        juce::Component::SafePointer<SlotRowComponent> safeProc (this);
+        juce::MessageManager::callAsync ([safeProc, desc, slot = index]
         {
             if (safeProc == nullptr)
                 return;
