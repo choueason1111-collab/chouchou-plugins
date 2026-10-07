@@ -62,6 +62,7 @@ jobs:
         run: |
           OUT="dist/chouchou-plugins-${{ matrix.name }}"
           mkdir -p "$OUT/VST3" "$OUT/Standalone"
+          cp LICENSE THIRD_PARTY_NOTICES.md "$OUT/"
           find build -type d -path '*_artefacts/Release/VST3/*.vst3' -prune -exec cp -R {} "$OUT/VST3/" \;
           if [ "$RUNNER_OS" = "Windows" ]; then
             find build -type f -path '*_artefacts/Release/Standalone/*.exe' -exec cp {} "$OUT/Standalone/" \;
