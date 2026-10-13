@@ -219,6 +219,33 @@ NewProjectAudioProcessor::NewProjectAudioProcessor()
 {
     configureTransform (kDefaultFftOrder);
     apvts.addParameterListener ("fftsize", this);
+
+    auto meter = [] (const char* id, const char* name, juce::AudioProcessorParameter::Category category)
+    {
+        return new juce::AudioParameterFloat (juce::ParameterID { id, 7 }, name, juce::NormalisableRange<float> (0.0f, 40.0f), 0.0f,
+                                              juce::AudioParameterFloatAttributes().withLabel ("dB").withAutomatable (false).withCategory (category));
+    };
+    addParameter (grMeter = meter ("grmeter", "Gain Reduction", juce::AudioProcessorParameter::compressorLimiterGainReductionMeter));
+    addParameter (boostMeter = meter ("boostmeter", "Boost Meter", juce::AudioProcessorParameter::otherMeter));
+
+    // Read-only: the latency reported to the host, in samples (control surfaces read it here).
+    addParameter (latencyParam = new juce::AudioParameterFloat (juce::ParameterID { "latency", 8 }, "Latency",
+        juce::NormalisableRange<float> (0.0f, (float) (1 << kMaxFftOrder), 1.0f), (float) fftSize,
+        juce::AudioParameterFloatAttributes().withLabel ("samples").withAutomatable (false)
+            .withCategory (juce::AudioProcessorParameter::otherMeter)
+            .withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)); })));
+}
+
+void NewProjectAudioProcessor::publishMeters (float grDb, float boostDb) noexcept
+{
+    auto send = [] (juce::AudioParameterFloat* p, float db)
+    {
+        db = juce::jlimit (0.0f, 40.0f, db);
+        if (p != nullptr && std::abs (p->get() - db) >= 0.1f)
+            p->setValueNotifyingHost (p->convertTo0to1 (db));
+    };
+    send (grMeter, grDb);
+    send (boostMeter, boostDb);
 }
 
 NewProjectAudioProcessor::~NewProjectAudioProcessor()
@@ -280,6 +307,8 @@ void NewProjectAudioProcessor::configureTransform (int order)
     hopSize  = fftSize / 4;
     fft = std::make_unique<juce::dsp::FFT> (fftOrder);
     setLatencySamples (fftSize);
+    if (latencyParam != nullptr && juce::roundToInt (latencyParam->get()) != fftSize)
+        latencyParam->setValueNotifyingHost (latencyParam->convertTo0to1 ((float) fftSize));
 }
 
 void NewProjectAudioProcessor::resetChannel (ChannelState& ch)
@@ -789,6 +818,8 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         meterBoostDb.store (blockBoostDb, std::memory_order_relaxed);
         meterGrDb.store (blockGrDb, std::memory_order_relaxed);
     }
+
+    publishMeters (meterGrDb.load (std::memory_order_relaxed), meterBoostDb.load (std::memory_order_relaxed));
 }
 
 //==============================================================================

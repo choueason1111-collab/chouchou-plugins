@@ -3,6 +3,7 @@ _deps/
 dist/
 build/
 build_*/
+build-*/
 Builds/*/build/
 xcuserdata/
 *.xcuserdatad/

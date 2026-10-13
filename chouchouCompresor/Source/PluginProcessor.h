@@ -166,7 +166,14 @@ private:
     static float boostTargetGain (float magLin, float lowLin, float upRatio) noexcept;
     static float grTargetGain (float magLin, float highLin, float downRatio) noexcept;
 
+    void publishMeters (float grDb, float boostDb) noexcept;
+
     juce::AudioProcessorValueTreeState apvts;
+
+    // Read-only meter parameters (0..40 dB) so hosts and control surfaces can show them.
+    juce::AudioParameterFloat* grMeter = nullptr;
+    juce::AudioParameterFloat* boostMeter = nullptr;
+    juce::AudioParameterFloat* latencyParam = nullptr;
     std::unique_ptr<juce::dsp::FFT> fft;
     std::vector<ChannelState> channels;
 

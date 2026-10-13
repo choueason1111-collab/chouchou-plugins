@@ -15,7 +15,8 @@ juce_add_plugin(chouchouCompressor
     COPY_PLUGIN_AFTER_BUILD ${CHOUCHOU_COPY_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE ChoU
     PLUGIN_CODE cCp1
-    FORMATS VST3 AU Standalone
+    FORMATS ${CHOUCHOU_PLUGIN_FORMATS}
+    AAX_CATEGORY Dynamics
     PRODUCT_NAME "chouchouCompressor"
     DESCRIPTION "Dual-threshold spectral compressor"
     VST3_CATEGORIES Fx Dynamics)

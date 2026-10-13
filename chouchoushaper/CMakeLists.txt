@@ -3,10 +3,9 @@ project(chouchouShaper VERSION 1.0.0)
 
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/chouchou.cmake")
 
-# AAX only when this folder is built on its own on this Mac (Pro Tools); the shared
-# Windows / Mac build of all plugins ships VST3, AU and Standalone like the others.
-set(chouchouShaper_FORMATS VST3 AU Standalone)
-if(PROJECT_IS_TOP_LEVEL)
+# AAX also when this folder is built on its own on this Mac (Pro Tools).
+set(chouchouShaper_FORMATS ${CHOUCHOU_PLUGIN_FORMATS})
+if(PROJECT_IS_TOP_LEVEL AND NOT CHOUCHOU_BUILD_AAX)
     list(APPEND chouchouShaper_FORMATS AAX)
 endif()
 

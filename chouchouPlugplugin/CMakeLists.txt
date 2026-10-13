@@ -15,7 +15,8 @@ juce_add_plugin(chouchouPlugplugin
     COPY_PLUGIN_AFTER_BUILD ${CHOUCHOU_COPY_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE ChoU
     PLUGIN_CODE cPlg
-    FORMATS VST3 AU Standalone
+    FORMATS ${CHOUCHOU_PLUGIN_FORMATS}
+    AAX_CATEGORY Effect
     PRODUCT_NAME "chouchouPlugplugin"
     DESCRIPTION "10-slot serial plugin rack"
     VST3_CATEGORIES Fx Tools)

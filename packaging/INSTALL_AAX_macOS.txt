@@ -1,0 +1,22 @@
+chouchou plugins - AAX for Pro Tools, macOS 11 or later (Apple Silicon and Intel)
+================================================================================
+
+安裝（中文）
+1. 把 AAX 資料夾裡的 .aaxplugin 複製到：
+       /Library/Application Support/Avid/Audio/Plug-Ins
+   （在 Finder 按 Cmd+Shift+G 貼上路徑即可前往，可能需要輸入電腦密碼）
+2. 這些插件已經過 PACE 簽名，可以在正式版 Pro Tools 中使用，但沒有經過 Apple 公證。
+   如果 Pro Tools 顯示「無法驗證開發者」，打開「終端機」執行：
+       xattr -dr com.apple.quarantine "/Library/Application Support/Avid/Audio/Plug-Ins"
+   或到「系統設定 → 隱私權與安全性」按「仍要允許」。
+3. 重新開啟 Pro Tools。
+
+Install (English)
+1. Copy the .aaxplugin files from the AAX folder to:
+       /Library/Application Support/Avid/Audio/Plug-Ins
+   (in Finder, Cmd+Shift+G and paste the path; you may need your Mac password)
+2. The plugins are PACE-signed and load in the regular Pro Tools, but they are not
+   notarized by Apple. If Pro Tools says the developer cannot be verified, run in Terminal:
+       xattr -dr com.apple.quarantine "/Library/Application Support/Avid/Audio/Plug-Ins"
+   or click "Allow Anyway" in System Settings -> Privacy & Security.
+3. Restart Pro Tools.

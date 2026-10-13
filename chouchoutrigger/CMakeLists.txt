@@ -15,7 +15,8 @@ juce_add_plugin(chouchouTrigger
     COPY_PLUGIN_AFTER_BUILD ${CHOUCHOU_COPY_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE ChoU
     PLUGIN_CODE cTrg
-    FORMATS VST3 AU Standalone
+    FORMATS ${CHOUCHOU_PLUGIN_FORMATS}
+    AAX_CATEGORY SWGenerators
     PRODUCT_NAME "chouchouTrigger"
     DESCRIPTION "Threshold drum trigger: fires up to six layered samples with pitch shift"
     VST3_CATEGORIES Fx Generator)

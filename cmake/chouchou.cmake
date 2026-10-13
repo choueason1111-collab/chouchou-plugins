@@ -10,6 +10,13 @@ include_guard(GLOBAL)
 set(CHOUCHOU_JUCE_DIR "$ENV{HOME}/JUCE" CACHE PATH "JUCE source folder")
 set(CHOUCHOU_ARA_SDK_DIR "$ENV{HOME}/SDKs/ARA_SDK" CACHE PATH "Celemony ARA SDK folder")
 option(CHOUCHOU_COPY_AFTER_BUILD "Install each plugin into the system plugin folder after building" ON)
+# Off by default: unsigned AAX builds only load in Pro Tools Developer, so release builds skip them.
+option(CHOUCHOU_BUILD_AAX "Also build the AAX (Pro Tools) version of every plugin" OFF)
+
+set(CHOUCHOU_PLUGIN_FORMATS VST3 AU Standalone)
+if(CHOUCHOU_BUILD_AAX)
+    list(APPEND CHOUCHOU_PLUGIN_FORMATS AAX)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

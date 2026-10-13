@@ -15,7 +15,8 @@ juce_add_plugin(chouchouDelay
     COPY_PLUGIN_AFTER_BUILD ${CHOUCHOU_COPY_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE ChoU
     PLUGIN_CODE cDly
-    FORMATS VST3 AU Standalone
+    FORMATS ${CHOUCHOU_PLUGIN_FORMATS}
+    AAX_CATEGORY Delay
     PRODUCT_NAME "chouchouDelay"
     DESCRIPTION "Multi-tap delay with per-echo level, time offset and pitch shift"
     VST3_CATEGORIES Fx Delay)

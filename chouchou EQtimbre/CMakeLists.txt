@@ -14,7 +14,8 @@ juce_add_plugin(chouchouEQtimbre
     COPY_PLUGIN_AFTER_BUILD ${CHOUCHOU_COPY_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE ChoU
     PLUGIN_CODE cTmb
-    FORMATS VST3 AU Standalone
+    FORMATS ${CHOUCHOU_PLUGIN_FORMATS}
+    AAX_CATEGORY Harmonic
     PRODUCT_NAME "chouchouEQtimbre"
     DESCRIPTION "Even / odd harmonic rendering"
     VST3_CATEGORIES Fx Distortion
