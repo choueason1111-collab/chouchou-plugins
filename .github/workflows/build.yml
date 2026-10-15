@@ -48,6 +48,9 @@ jobs:
           EXTRA=()
           if [ "$RUNNER_OS" = "macOS" ]; then
             EXTRA+=(-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0)
+          else
+            # Unsigned AAX, PACE-signed afterwards on a Windows machine with the iLok.
+            EXTRA+=(-DCHOUCHOU_BUILD_AAX=ON)
           fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
               -DCHOUCHOU_JUCE_DIR="$DEPS/JUCE" \
@@ -68,6 +71,9 @@ jobs:
             find build -type f -path '*_artefacts/Release/Standalone/*.exe' -exec cp {} "$OUT/Standalone/" \;
             cp packaging/INSTALL_Windows.txt "$OUT/INSTALL.txt"
             (cd dist && 7z a "../chouchou-plugins-${{ matrix.name }}.zip" "chouchou-plugins-${{ matrix.name }}")
+            mkdir -p dist/AAX-unsigned
+            find build -type d -path '*_artefacts/Release/AAX/*.aaxplugin' -prune -exec cp -R {} dist/AAX-unsigned/ \;
+            (cd dist && 7z a ../chouchou-plugins-AAX-Windows-unsigned.zip AAX-unsigned)
           else
             mkdir -p "$OUT/AU"
             find build -type d -path '*_artefacts/Release/AU/*.component' -prune -exec cp -R {} "$OUT/AU/" \;
@@ -82,6 +88,13 @@ jobs:
         with:
           name: chouchou-plugins-${{ matrix.name }}
           path: chouchou-plugins-${{ matrix.name }}.zip
+
+      # Not published on the Releases page: Pro Tools only loads it once PACE-signed.
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: chouchou-plugins-AAX-Windows-unsigned
+          path: chouchou-plugins-AAX-Windows-unsigned.zip
 
       - name: Publish on the Releases page (tags only)
         if: startsWith(github.ref, 'refs/tags/')
