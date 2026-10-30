@@ -167,9 +167,9 @@ bool NewProjectAudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
 
 bool NewProjectAudioProcessor::configureInnerBuses (juce::AudioPluginInstance& plugin)
 {
-    // Keep the SAME channel layout as this rack end-to-end. Insert Basic (and most
-    // hosts) are stereo throughout — do NOT silently fall back to mono for later
-    // slots, or nested plugins "stop detecting" while Audition (stable stereo) works.
+    // Prefer the host layout so a stereo session stays stereo end-to-end.
+    // Do NOT fall back from stereo to mono: that made later slots drop to mono
+    // in Audition while the first slot stayed stereo.
     const int hostCh = juce::jmax (1, getMainBusNumOutputChannels());
     const auto set = hostCh >= 2 ? juce::AudioChannelSet::stereo()
                                  : juce::AudioChannelSet::mono();
@@ -201,12 +201,23 @@ bool NewProjectAudioProcessor::configureInnerBuses (juce::AudioPluginInstance& p
     if (tryMainIO (set, true) || tryMainIO (set, false))
         return true;
 
-    // Last resort: leave plugin default but mute sidechain/aux — still require
-    // main I/O channel count to match the rack.
+    // Pro Tools audio tracks are often mono. Stereo-only plugs cannot take a
+    // mono bus, so keep them stereo. processHostedInstance folds that I/O.
+    if (hostCh < 2)
+    {
+        const auto stereo = juce::AudioChannelSet::stereo();
+        if (tryMainIO (stereo, true) || tryMainIO (stereo, false))
+            return true;
+    }
+
     plugin.disableNonMainBuses();
     const int inCh  = plugin.getMainBusNumInputChannels();
     const int outCh = plugin.getMainBusNumOutputChannels();
-    return (outCh == hostCh) && (inCh == 0 || inCh == hostCh);
+
+    if ((outCh == hostCh) && (inCh == 0 || inCh == hostCh))
+        return true;
+
+    return hostCh < 2 && outCh >= 2 && (inCh == 0 || inCh >= 2);
 }
 
 void NewProjectAudioProcessor::resyncAllInnerPlugins()

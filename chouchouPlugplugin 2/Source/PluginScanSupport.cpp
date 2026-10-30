@@ -71,21 +71,12 @@ juce::File findChouChouScannerExecutable()
 
 bool isChouChouRunningAsStandaloneApp()
 {
-   #if JUCE_WINDOWS
+    // This file is compiled once into the shared plugin code, where
+    // JucePlugin_Build_Standalone is 1 for every format. The executable path
+    // cannot be used either: inside Pro Tools it is Pro Tools.app, which was
+    // mistaken for our own Standalone. isStandaloneApp() is true only when
+    // this process started as the JUCE standalone.
     return juce::JUCEApplicationBase::isStandaloneApp();
-   #else
-    const auto self = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
-    if (! self.existsAsFile())
-        return false;
-
-    // .../Something.app/Contents/MacOS/binary
-    const auto macos = self.getParentDirectory();
-    const auto contents = macos.getParentDirectory();
-    const auto bundle = contents.getParentDirectory();
-    return macos.getFileName() == "MacOS"
-        && contents.getFileName() == "Contents"
-        && bundle.getFileName().endsWithIgnoreCase (".app");
-   #endif
 }
 
 //==============================================================================
