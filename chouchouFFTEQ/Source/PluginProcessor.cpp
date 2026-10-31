@@ -86,6 +86,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChouchouFFTEQAudioProcessor:
     p.push_back (flag ("scMatch", "Copier le spectre", false));
     p.push_back (knob ("scAmount", fr ("Quantit\u00e9"), 0.0f, 1.0f, 0.0f));
     p.push_back (flag ("scFollow", "Suivi de hauteur", false));
+    p.push_back (flag ("scUseBands", "Bandes Sidechain", false));
+    p.push_back (std::make_unique<juce::AudioParameterInt> (
+        juce::ParameterID { "scBandN", 1 }, "Nombre de bandes Sidechain", 1, 1000, 12));
 
     p.push_back (knob ("pitch", "pitch", 0.25f, 4.0f, 1.0f));
     p.push_back (knob ("formant", "formant", 0.25f, 4.0f, 1.0f));
@@ -220,9 +223,21 @@ void ChouchouFFTEQAudioProcessor::ensureSizes()
     envB.assign ((size_t) kMaxBins, 0.0f);
     tmpMag.assign ((size_t) kMaxBins, 0.0f);
     tmpPhase.assign ((size_t) kMaxBins, 0.0f);
+    matchTarget.assign ((size_t) kMaxBins, 1.0f);
+    matchDb.assign ((size_t) kMaxBins, 0.0f);
+    scBandGain.assign (1000, 1.0f);
+    scNodes.assign (1000, {});
+    pubScBands.assign (1000, {});
+    for (auto& bank : scFilt)
+    {
+        bank.assign (1000, {});
+        for (auto& f : bank)
+            f.setUnity();
+    }
     pubMain.assign ((size_t) kMaxBins, 0.0f);
     pubSc.assign ((size_t) kMaxBins, 0.0f);
     pubRef.assign ((size_t) kMaxBins, 0.0f);
+    pubMatch.assign ((size_t) kMaxBins, 0.0f);
 }
 
 void ChouchouFFTEQAudioProcessor::clearChan (Chan& c)
@@ -434,7 +449,8 @@ void ChouchouFFTEQAudioProcessor::processEffectFrame (Chan& c, const float* scMa
     for (int i = 0; i < bins; ++i)
         readPolar (c.spectrum, i, c.mag[(size_t) i], c.phase[(size_t) i]);
 
-    const bool freeze = apvts.getRawParameterValue ("freeze")->load() > 0.5f;
+    const bool fftOn = apvts.getRawParameterValue ("fftOn")->load() > 0.5f;
+    const bool freeze = fftOn && apvts.getRawParameterValue ("freeze")->load() > 0.5f;
     if (freeze)
     {
         if (! c.hasFreeze)
@@ -475,27 +491,101 @@ void ChouchouFFTEQAudioProcessor::processEffectFrame (Chan& c, const float* scMa
             const float scE = lerpMag (envB, src, bins);
             const float mE = juce::jmax (envA[(size_t) i], 1.0e-8f);
             const float ratio = juce::jlimit (0.05f, 20.0f, scE / mE);
-            c.mag[(size_t) i] *= 1.0f + amount * (ratio - 1.0f);
+            matchTarget[(size_t) i] = 1.0f + amount * (ratio - 1.0f);
             if (i > 0 && scE > peakTemplate)
             {
                 peakTemplate = scE;
                 peak = i;
             }
         }
+
+        const bool useBands = apvts.getRawParameterValue ("scUseBands")->load() > 0.5f;
+        const int bandN = juce::jlimit (1, 1000, (int) std::lround (apvts.getRawParameterValue ("scBandN")->load()));
+        if (useBands)
+        {
+            if (&c == &channels[0])
+            {
+                const float nyquist = (float) currentSampleRate * 0.5f;
+                const float fLo = 30.0f;
+                const float fHi = juce::jmax (fLo + 1.0f, juce::jmin (nyquist * 0.9f, 18000.0f));
+                const float logSpan = std::log (fHi / fLo);
+                const int n = bandN;
+                const float octaves = std::log2 (fHi / fLo);
+                const float bw = juce::jmax (0.04f, octaves / (float) juce::jmax (1, n));
+                const float q = juce::jlimit (0.25f, 12.0f, 1.0f / (2.0f * std::sinh (0.5f * std::log (2.0f) * bw)));
+                std::fill_n (matchDb.begin(), (size_t) bins, 0.0f);
+                for (int b = 0; b < n; ++b)
+                {
+                    const float t = n == 1 ? 0.5f : (float) b / (float) (n - 1);
+                    const float hz = juce::jlimit (20.0f, nyquist * 0.95f, fLo * std::exp (logSpan * t));
+                    const float bin = hz * (float) fftSize / (float) currentSampleRate;
+                    const float g = juce::jmax (lerpMag (matchTarget, bin, bins), 1.0e-8f);
+                    scBandGain[(size_t) b] = 20.0f * std::log10 (g);
+                    scNodes[(size_t) b] = { hz, 0.0f, q };
+                }
+                for (int pass = 0; pass < 2; ++pass)
+                {
+                    for (int b = 0; b < n; ++b)
+                    {
+                        const float hz = scNodes[(size_t) b].hz;
+                        float sum = 0.0f;
+                        const int p0 = juce::jmax (0, b - 8);
+                        const int p1 = juce::jmin (n - 1, b + 8);
+                        for (int p = p0; p <= p1; ++p)
+                            if (p != b)
+                                sum += scFilt[0][(size_t) p].responseDb (hz, currentSampleRate);
+                        const float db = juce::jlimit (-24.0f, 24.0f, scBandGain[(size_t) b] - sum);
+                        scNodes[(size_t) b].db = db;
+                        const auto designed = chouchoueq::Biquad::peak (currentSampleRate, hz, q, db);
+                        for (auto& bank : scFilt)
+                            bank[(size_t) b].copyCoeffs (designed);
+                    }
+                }
+                for (int b = 0; b < n; ++b)
+                {
+                    const int shown = juce::jlimit (0, bins - 1,
+                                                    (int) std::lround ((double) scNodes[(size_t) b].hz * (double) fftSize / currentSampleRate));
+                    matchDb[(size_t) shown] = scNodes[(size_t) b].db;
+                }
+                scFiltCount = n;
+                matchBandCount = n;
+            }
+        }
+        else
+        {
+            for (int i = 0; i < bins; ++i)
+            {
+                const float g = matchTarget[(size_t) i];
+                c.mag[(size_t) i] *= g;
+                if (&c == &channels[0])
+                    matchDb[(size_t) i] = 20.0f * std::log10 (juce::jmax (g, 1.0e-8f));
+            }
+            if (&c == &channels[0])
+            {
+                matchBandCount = 0;
+                scFiltCount = 0;
+            }
+        }
+
         if (&c == &channels[0])
             matchPeakHz.store ((float) ((double) peak * currentSampleRate / (double) fftSize),
                                std::memory_order_relaxed);
     }
     else if (&c == &channels[0])
+    {
         matchPeakHz.store (0.0f, std::memory_order_relaxed);
+        std::fill_n (matchDb.begin(), (size_t) bins, 0.0f);
+        matchBandCount = 0;
+        scFiltCount = 0;
+    }
 
-    const float pitch = apvts.getRawParameterValue ("pitch")->load();
-    const float formant = apvts.getRawParameterValue ("formant")->load();
-    const float offset = apvts.getRawParameterValue ("offsetBins")->load();
-    const int experiment = (int) apvts.getRawParameterValue ("experiment")->load();
-    const float shift = apvts.getRawParameterValue ("shift")->load();
-    const float shiftreel = apvts.getRawParameterValue ("shiftreel")->load();
-    const float shiftimage = apvts.getRawParameterValue ("shiftimage")->load();
+    const float pitch = fftOn ? apvts.getRawParameterValue ("pitch")->load() : 1.0f;
+    const float formant = fftOn ? apvts.getRawParameterValue ("formant")->load() : 1.0f;
+    const float offset = fftOn ? apvts.getRawParameterValue ("offsetBins")->load() : 0.0f;
+    const int experiment = fftOn ? (int) apvts.getRawParameterValue ("experiment")->load() : 0;
+    const float shift = fftOn ? apvts.getRawParameterValue ("shift")->load() : 1.0f;
+    const float shiftreel = fftOn ? apvts.getRawParameterValue ("shiftreel")->load() : 1.0f;
+    const float shiftimage = fftOn ? apvts.getRawParameterValue ("shiftimage")->load() : 1.0f;
 
     auto peekSnap = [&] (float pos, float& reel, float& image)
     {
@@ -610,10 +700,10 @@ void ChouchouFFTEQAudioProcessor::processEffectFrame (Chan& c, const float* scMa
         }
     }
 
-    const float tilt = apvts.getRawParameterValue ("tilt")->load();
-    const float contrast = apvts.getRawParameterValue ("contrast")->load();
-    const float gate = apvts.getRawParameterValue ("gate")->load();
-    const float blur = apvts.getRawParameterValue ("blur")->load();
+    const float tilt = fftOn ? apvts.getRawParameterValue ("tilt")->load() : 0.0f;
+    const float contrast = fftOn ? apvts.getRawParameterValue ("contrast")->load() : 1.0f;
+    const float gate = fftOn ? apvts.getRawParameterValue ("gate")->load() : 0.0f;
+    const float blur = fftOn ? apvts.getRawParameterValue ("blur")->load() : 0.0f;
 
     if (std::abs (tilt) > 0.0001f)
     {
@@ -667,8 +757,8 @@ void ChouchouFFTEQAudioProcessor::processEffectFrame (Chan& c, const float* scMa
         std::copy_n (tmpPhase.begin(), (size_t) bins, c.phase.begin());
     }
 
-    const float mulReel = apvts.getRawParameterValue ("mulReel")->load();
-    const float mulImage = apvts.getRawParameterValue ("mulImage")->load();
+    const float mulReel = fftOn ? apvts.getRawParameterValue ("mulReel")->load() : 1.0f;
+    const float mulImage = fftOn ? apvts.getRawParameterValue ("mulImage")->load() : 1.0f;
     for (int i = 0; i < bins; ++i)
     {
         const float re = c.mag[(size_t) i] * std::cos (c.phase[(size_t) i]) * mulReel;
@@ -730,23 +820,7 @@ void ChouchouFFTEQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                          && apvts.getRawParameterValue ("scAmount")->load() > 0.0001f
                          && scMode > 0
                          && scCh > 0;
-    const auto away = [] (float value, float neutral) { return std::abs (value - neutral) > 0.001f; };
-    const bool fftLive = fftOn
-                         || (int) apvts.getRawParameterValue ("experiment")->load() != 0
-                         || away (apvts.getRawParameterValue ("pitch")->load(), 1.0f)
-                         || away (apvts.getRawParameterValue ("formant")->load(), 1.0f)
-                         || away (apvts.getRawParameterValue ("offsetBins")->load(), 0.0f)
-                         || away (apvts.getRawParameterValue ("mulReel")->load(), 1.0f)
-                         || away (apvts.getRawParameterValue ("mulImage")->load(), 1.0f)
-                         || away (apvts.getRawParameterValue ("tilt")->load(), 0.0f)
-                         || away (apvts.getRawParameterValue ("contrast")->load(), 1.0f)
-                         || apvts.getRawParameterValue ("gate")->load() > 0.001f
-                         || apvts.getRawParameterValue ("blur")->load() > 0.01f
-                         || away (apvts.getRawParameterValue ("shift")->load(), 1.0f)
-                         || away (apvts.getRawParameterValue ("shiftreel")->load(), 1.0f)
-                         || away (apvts.getRawParameterValue ("shiftimage")->load(), 1.0f)
-                         || apvts.getRawParameterValue ("freeze")->load() > 0.5f;
-    const bool spectral = fftLive || matchOn;
+    const bool spectral = fftOn || matchOn;
 
     chouchoueq::BandSettings settings[(size_t) kMaxBands];
     const int bandCount = (int) apvts.getRawParameterValue ("bandCount")->load();
@@ -803,6 +877,7 @@ void ChouchouFFTEQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     {
         float shapedForAnalysis = 0.0f;
         float scSample = 0.0f;
+        float dryS[2] {}, wetS[2] {};
 
         for (int ch = 0; ch < numCh; ++ch)
         {
@@ -825,24 +900,49 @@ void ChouchouFFTEQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 c.outRing[(size_t) c.writePos] = 0.0f;
                 c.inRing[(size_t) c.writePos] = shaped;
                 c.writePos = (c.writePos + 1) % fftSize;
-                if (ch == numCh - 1)
-                {
-                    // Hop is counted on the last channel so every channel sees the same clock.
-                }
             }
             else
                 wet = readDelay (c.bypassDelay, c.bypassPos, shaped, fftSize);
 
-            if (autoGain)
+            const int bandBank = scFiltCount;
+            if (bandBank > 0)
             {
-                inPower += agCoeff * (in * in - inPower);
-                wetPower += agCoeff * (wet * wet - wetPower);
-                const float g = std::sqrt (inPower / juce::jmax (wetPower, 1.0e-12f));
-                wet *= juce::jlimit (0.03f, 30.0f, g);
+                auto& bank = scFilt[(size_t) ch];
+                for (int b = 0; b < bandBank; ++b)
+                    wet = bank[(size_t) b].process (wet);
             }
 
-            data[n] = dry + mix * (wet - dry);
+            dryS[ch] = dry;
+            wetS[ch] = wet;
         }
+
+        // The wet signal is already delayed by the FFT (and by the FIR, when that
+        // engine is on). The reference has to be the dry signal delayed by the
+        // same amount. Comparing it to the live input pegs the gain while the
+        // delay line is still empty, so the first notes come out far too loud.
+        if (autoGain)
+        {
+            float ip = 0.0f, wp = 0.0f;
+            for (int ch = 0; ch < numCh; ++ch)
+            {
+                ip += dryS[ch] * dryS[ch];
+                wp += wetS[ch] * wetS[ch];
+            }
+            const float inv = 1.0f / (float) juce::jmax (1, numCh);
+            inPower += agCoeff * (ip * inv - inPower);
+            wetPower += agCoeff * (wp * inv - wetPower);
+            float g = 1.0f;
+            if (inPower > 1.0e-8f || wetPower > 1.0e-8f)
+                g = std::sqrt (inPower / juce::jmax (wetPower, 1.0e-12f));
+            g = juce::jlimit (0.03f, 30.0f, g);
+            for (int ch = 0; ch < numCh; ++ch)
+                wetS[ch] *= g;
+        }
+        else
+            inPower = wetPower = 1.0e-8f;
+
+        for (int ch = 0; ch < numCh; ++ch)
+            buffer.getWritePointer (ch)[n] = dryS[ch] + mix * (wetS[ch] - dryS[ch]);
 
         if (spectral)
         {
@@ -886,6 +986,10 @@ void ChouchouFFTEQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 std::copy_n (mainLive.begin(), (size_t) nBins, pubMain.begin());
                 std::copy_n (scLive.begin(), (size_t) nBins, pubSc.begin());
                 std::copy_n (reference.begin(), (size_t) nBins, pubRef.begin());
+                std::copy_n (matchDb.begin(), (size_t) nBins, pubMatch.begin());
+                pubMatchBands = matchBandCount;
+                if (matchBandCount > 0)
+                    std::copy_n (scNodes.begin(), (size_t) matchBandCount, pubScBands.begin());
                 spectrumMutex.unlock();
             }
             analysisHops.fetch_add (1, std::memory_order_relaxed);
@@ -921,6 +1025,19 @@ void ChouchouFFTEQAudioProcessor::copySpectra (std::vector<float>& mainMag,
     mainMag.assign (pubMain.begin(), pubMain.begin() + nBins);
     sidechainMag.assign (pubSc.begin(), pubSc.begin() + nBins);
     referenceMag.assign (pubRef.begin(), pubRef.begin() + nBins);
+}
+
+void ChouchouFFTEQAudioProcessor::copyMatch (std::vector<float>& gainDb, int& bandCount) const
+{
+    std::lock_guard<std::mutex> lock (spectrumMutex);
+    gainDb.assign (pubMatch.begin(), pubMatch.begin() + nBins);
+    bandCount = pubMatchBands;
+}
+
+void ChouchouFFTEQAudioProcessor::copyScBands (std::vector<ScBand>& bands) const
+{
+    std::lock_guard<std::mutex> lock (spectrumMutex);
+    bands.assign (pubScBands.begin(), pubScBands.begin() + juce::jlimit (0, 1000, pubMatchBands));
 }
 
 bool ChouchouFFTEQAudioProcessor::hasEditor() const { return true; }

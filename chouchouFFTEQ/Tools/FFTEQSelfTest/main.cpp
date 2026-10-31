@@ -7,6 +7,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -399,8 +400,25 @@ int main()
         moved.prepare();
         const auto louder = moved.render (tone440);
         const double ratio = rms (louder, tail) / std::max (rms (plain, tail), 1.0e-9);
-        expect (ratio > 1.5, "mulreel agit meme si la case FFT est eteinte",
+        expect (ratio < 1.05, "la case FFT eteinte coupe mulreel",
                 "rapport " + std::to_string (ratio));
+
+        Rig armed;
+        setParam (armed.p, "fftOn", 1.0f);
+        setParam (armed.p, "mulReel", 3.0f);
+        armed.prepare();
+        const auto on = armed.render (tone440);
+        const double onRatio = rms (on, tail) / std::max (rms (plain, tail), 1.0e-9);
+        expect (onRatio > 1.5, "la case FFT allumee laisse passer mulreel",
+                "rapport " + std::to_string (onRatio));
+
+        Rig shiftedOff;
+        setParam (shiftedOff.p, "fftOn", 0.0f);
+        setParam (shiftedOff.p, "experiment", 1.0f);
+        setParam (shiftedOff.p, "shift", 2.0f);
+        shiftedOff.prepare();
+        const auto stayed = shiftedOff.render (tone440);
+        expect (maxAbsDiff (stayed, plain, tail) < 0.02, "experience sans case FFT ne change pas le son");
     }
 
     {
@@ -592,6 +610,46 @@ int main()
         const double relOn = goertzel (shaped, specFrom, specLen, 800.0) / std::max (goertzel (shaped, specFrom, specLen, 200.0), 1.0e-12);
         expect (relOn > relOff * 1.25, "la copie rapproche l'enveloppe du Sidechain",
                 std::to_string (relOff) + " -> " + std::to_string (relOn));
+
+        std::vector<float> curve;
+        int shownBands = -1;
+        copied.p->copyMatch (curve, shownBands);
+        float extreme = 0.0f;
+        for (float v : curve)
+            extreme = std::max (extreme, std::abs (v));
+        expect (extreme > 0.3f && shownBands == 0, "sans bandes la copie s'affiche sur le spectre",
+                "bandes " + std::to_string (shownBands) + " ecart " + std::to_string (extreme));
+
+        auto sideRatio = [&] (int bandCount)
+        {
+            Rig r (true);
+            setParam (r.p, "fftOn", 1.0f);
+            setParam (r.p, "scMode", 2.0f);
+            setParam (r.p, "scMatch", 1.0f);
+            setParam (r.p, "scAmount", 1.0f);
+            setParam (r.p, "scUseBands", 1.0f);
+            setParam (r.p, "scBandN", (float) bandCount);
+            r.prepare();
+            const auto out = r.render (harm, &sc);
+            const double ratio = goertzel (out, specFrom, specLen, 800.0)
+                                 / std::max (goertzel (out, specFrom, specLen, 200.0), 1.0e-12);
+            std::vector<float> drawn;
+            int bands = -1;
+            r.p->copyMatch (drawn, bands);
+            float draw = 0.0f;
+            for (float v : drawn)
+                draw = std::max (draw, std::abs (v));
+            return std::tuple<double, int, float> { ratio, bands, draw };
+        };
+        const auto few = sideRatio (1);
+        const auto many = sideRatio (64);
+        expect (std::get<1> (many) == 64 && std::get<2> (many) > 0.3f,
+                "les bandes imitent le Sidechain et s'affichent",
+                "n " + std::to_string (std::get<1> (many)) + " ecart " + std::to_string (std::get<2> (many)));
+        expect (std::get<0> (many) > std::get<0> (few) * 8.0 && std::get<0> (many) < relOn * 8.0,
+                "plus de bandes imite mieux le Sidechain",
+                "1 " + std::to_string (std::get<0> (few)) + " 64 " + std::to_string (std::get<0> (many))
+                    + " spectral " + std::to_string (relOn));
     }
 
     {
@@ -667,9 +725,22 @@ int main()
         const double inR = rms (unity.render (tone440), tail);
         const double boostR = rms (boosted, tail) / inR;
         const double levelR = rms (leveled, tail) / inR;
-        expect (boostR > 4.0 && levelR < boostR * 0.5,
-                "Auto Gain reduit l'ecart de niveau, et coupe il le laisse",
+        expect (boostR > 4.0 && levelR > 0.75 && levelR < 1.25,
+                "Auto Gain ramene le niveau de l'EQ vers l'entree",
                 "sans " + std::to_string (boostR) + " avec " + std::to_string (levelR));
+
+        std::vector<float> burst ((size_t) n, 0.0f);
+        for (int i = 4000; i < n; ++i)
+            burst[(size_t) i] = tone440[(size_t) i];
+        const auto burstOut = comp.render (burst);
+        const int arrive = 4000 + comp.p->getLatencySamples();
+        double spike = 0.0;
+        for (int i = arrive; i < arrive + 1500 && i < n; ++i)
+            spike = std::max (spike, (double) std::abs (burstOut[(size_t) i]));
+        const double steady = rms (leveled, tail);
+        expect (spike < steady * 4.0,
+                "Auto Gain ne sature pas l'attaque",
+                "pic " + std::to_string (spike) + " stable " + std::to_string (steady));
     }
 
     {

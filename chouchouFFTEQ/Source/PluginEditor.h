@@ -42,11 +42,12 @@ private:
     void drawPhase (juce::Graphics& g);
     void showPage (int page);
     void updateFftCode();
+    void paintFftCode (juce::Graphics& g);
 
     ChouchouFFTEQAudioProcessor& audioProcessor;
     juce::AudioProcessorValueTreeState& apvts;
 
-    juce::Label title, eqCaption, fftCaption, fftCode, mixCaption, amountCaption, engineLabel, windowLabel;
+    juce::Label title, eqCaption, fftCaption, mixCaption, amountCaption, engineLabel, windowLabel;
     juce::Rectangle<int> bandHeader;
     std::array<int, 7> colX {}, colW {};
     int selectedBand = 0;
@@ -54,9 +55,12 @@ private:
     bool dragChangesQ = false;
     float dragStartQ = 0.707f;
     float dragStartY = 0.0f;
-    juce::Rectangle<int> spectrumArea;
-    juce::ToggleButton eqOn, fftOn, autoGain, scMatch, scFollow, scCapture, freeze;
-    juce::Slider mix, scAmount;
+    juce::Rectangle<int> spectrumArea, fftCodeArea;
+    juce::String fftFormula;
+    juce::ToggleButton eqOn, autoGain, scMatch, scFollow, scCapture, freeze, scUseBands;
+    juce::TextButton fftOn { "FFT" };
+    juce::Slider mix, scAmount, scBandN;
+    juce::Label scBandCaption;
     juce::ComboBox scMode, fftSize, eqEngine, experimentBox;
     juce::TextButton addBand { "Ajouter une bande" };
     juce::TextButton removeBand { "Supprimer" };
@@ -84,11 +88,13 @@ private:
     };
     std::array<Knob, 12> knobs;
 
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> eqAtt, fftAtt, agAtt, matchAtt, followAtt, capAtt, freezeAtt;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mixAtt, amountAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> eqAtt, fftAtt, agAtt, matchAtt, followAtt, capAtt, freezeAtt, scUseBandsAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mixAtt, amountAtt, scBandAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> scModeAtt, fftSizeAtt, engineAtt, experimentAtt;
 
-    std::vector<float> mainMag, scMag, refMag;
+    std::vector<float> mainMag, scMag, refMag, matchDb;
+    std::vector<ChouchouFFTEQAudioProcessor::ScBand> scNodes;
+    int matchBands = 0;
     std::vector<float> refCurve, slotA, slotB, corrHistory;
     AnalyserControls analyserUi;
     PhaseControls phaseUi;

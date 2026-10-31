@@ -57,7 +57,16 @@ public:
                       std::vector<float>& sidechainMag,
                       std::vector<float>& referenceMag) const;
 
+    struct ScBand
+    {
+        float hz = 1000.0f;
+        float db = 0.0f;
+        float q = 0.71f;
+    };
+
     float getMatchPeakHz() const noexcept { return matchPeakHz.load (std::memory_order_relaxed); }
+    void copyMatch (std::vector<float>& gainDb, int& bandCount) const;
+    void copyScBands (std::vector<ScBand>& bands) const;
     int getAnalysisHops() const noexcept { return analysisHops.load (std::memory_order_relaxed); }
 
     void setDisplayOpen (bool open) noexcept { displayOpen.store (open, std::memory_order_relaxed); }
@@ -118,11 +127,17 @@ private:
     Analyser mainAnalyser, scAnalyser;
     std::vector<float> reference, scLive, mainLive;
     std::vector<float> envA, envB, tmpMag, tmpPhase;
+    std::vector<float> matchTarget, matchDb, scBandGain;
+    std::array<std::vector<chouchoueq::Biquad>, 2> scFilt;
+    std::vector<ScBand> scNodes, pubScBands;
+    int scFiltCount = 0;
     bool lastCapture = false;
     bool referenceValid = false;
 
     mutable std::mutex spectrumMutex;
-    std::vector<float> pubMain, pubSc, pubRef;
+    std::vector<float> pubMain, pubSc, pubRef, pubMatch;
+    int matchBandCount = 0;
+    int pubMatchBands = 0;
     std::atomic<float> matchPeakHz { 0.0f };
     std::atomic<int> analysisHops { 0 };
 

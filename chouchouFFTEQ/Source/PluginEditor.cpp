@@ -61,30 +61,45 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p), apvts (p.getAPVTS()),
       analyserUi (apvts), phaseUi (apvts)
 {
-    setSize (920, 612);
+    setSize (920, 636);
     setResizable (true, true);
-    setResizeLimits (780, 540, 1100, 740);
+    setResizeLimits (780, 560, 1100, 740);
 
     styleLabel (title, "ChouchouFFTEQ", 16.0f);
     addAndMakeVisible (title);
 
     eqOn.setButtonText ("EQ");
-    fftOn.setButtonText ("FFT");
     autoGain.setButtonText ("Auto Gain");
     scMatch.setButtonText ("Copier le spectre");
     scFollow.setButtonText ("Suivi de hauteur");
     scCapture.setButtonText ("Capturer");
     freeze.setButtonText ("Geler");
-    for (auto* b : { &eqOn, &fftOn, &autoGain, &scMatch, &scFollow, &scCapture, &freeze })
+    scUseBands.setButtonText ("Bandes");
+    scUseBands.setTooltip (fr ("De vrais filtres en cloche, 1 \u00e0 1000, affich\u00e9s comme les bandes de l'EQ. D\u00e9coch\u00e9 : la copie spectrale compl\u00e8te, dessin\u00e9e sur le graphique. Temps r\u00e9el suit le Sidechain, Instantan\u00e9 garde la capture."));
+    for (auto* b : { &eqOn, &autoGain, &scMatch, &scFollow, &scCapture, &freeze, &scUseBands })
     {
         styleToggle (*b);
         addAndMakeVisible (b);
     }
+    fftOn.setClickingTogglesState (true);
+    fftOn.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2a2e33));
+    fftOn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xfff2d56b));
+    fftOn.setColour (juce::TextButton::textColourOffId, kText);
+    fftOn.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1c1f24));
+    fftOn.setTooltip (fr ("Interrupteur de toute la cha\u00eene FFT. D\u00e9coch\u00e9, hauteur, mulreel, exp\u00e9riences et Geler ne changent pas le son."));
+    addAndMakeVisible (fftOn);
 
     styleLinear (mix);
     addAndMakeVisible (mix);
     styleLinear (scAmount);
     addAndMakeVisible (scAmount);
+    styleLinear (scBandN);
+    scBandN.setNumDecimalPlacesToDisplay (0);
+    scBandN.setTextBoxStyle (juce::Slider::TextBoxRight, false, 48, 16);
+    scBandN.setTooltip (fr ("Nombre de bandes, de 1 \u00e0 1000."));
+    addAndMakeVisible (scBandN);
+    styleLabel (scBandCaption, "Nombre", 12.0f);
+    addAndMakeVisible (scBandCaption);
 
     styleCombo (scMode);
     styleCombo (fftSize);
@@ -119,11 +134,9 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
     addAndMakeVisible (amountCaption);
     styleLabel (fftCaption, "code", 13.0f);
     addAndMakeVisible (fftCaption);
-    fftCode.setFont (juce::FontOptions (12.0f).withName (juce::Font::getDefaultMonospacedFontName()));
-    fftCode.setColour (juce::Label::textColourId, juce::Colour (0xfff2d56b));
-    fftCode.setJustificationType (juce::Justification::centredLeft);
-    addAndMakeVisible (fftCode);
     styleCombo (experimentBox);
+    experimentBox.addItemList (juce::StringArray { "0_chaine", "1_shift", "2_split", "3_offset", "4_write" }, 1);
+    experimentBox.setTooltip ("0_chaine garde pitch puis formant. 1_shift, 2_split, 3_offset et 4_write sont les autres experiences.");
     addAndMakeVisible (experimentBox);
 
     eqCaption.setVisible (false);
@@ -181,6 +194,7 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
         row.slope.setTextBoxStyle (juce::Slider::TextBoxRight, false, 72, 18);
         row.slope.setTooltip (fr ("Pente de la coupe. 6 dB/oct = 1er ordre, 12 = 2e, 24 = 4e, 48 = 8e."));
         styleCombo (row.calc);
+        row.calc.addItemList (juce::StringArray { "Butterworth", "Q" }, 1);
         row.calc.setTooltip (fr ("Butterworth : pente r\u00e9guli\u00e8re. Q : chaque palier de 12 dB/oct reprend le Q."));
         bandHolder.addAndMakeVisible (row.calc);
         row.delay.setTextValueSuffix (" ms");
@@ -251,10 +265,12 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
     agAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "autoGain", autoGain);
     matchAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "scMatch", scMatch);
     followAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "scFollow", scFollow);
+    scUseBandsAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "scUseBands", scUseBands);
     capAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "scCapture", scCapture);
     freezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "freeze", freeze);
     mixAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, "mix", mix);
     amountAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, "scAmount", scAmount);
+    scBandAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, "scBandN", scBandN);
     scModeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (apvts, "scMode", scMode);
     fftSizeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (apvts, "fftSize", fftSize);
     engineAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (apvts, "eqEngine", eqEngine);
@@ -324,6 +340,11 @@ void ChouchouFFTEQEditor::timerCallback()
     }
     audioProcessor.pumpDisplays();
     audioProcessor.copySpectra (mainMag, scMag, refMag);
+    audioProcessor.copyMatch (matchDb, matchBands);
+    audioProcessor.copyScBands (scNodes);
+    const float bandAlpha = apvts.getRawParameterValue ("scUseBands")->load() > 0.5f ? 1.0f : 0.35f;
+    scBandN.setAlpha (bandAlpha);
+    scBandCaption.setAlpha (bandAlpha);
     anFrame = audioProcessor.copyAnalyser();
     phFrame = audioProcessor.copyPhase();
     if (viewPage == 2 && apvts.getRawParameterValue ("phFreeze")->load() < 0.5f)
@@ -351,24 +372,7 @@ void ChouchouFFTEQEditor::timerCallback()
 void ChouchouFFTEQEditor::updateFftCode()
 {
     const int experiment = (int) apvts.getRawParameterValue ("experiment")->load();
-    const auto away = [] (const char* id, float neutral, juce::AudioProcessorValueTreeState& tree)
-    {
-        return std::abs (tree.getRawParameterValue (id)->load() - neutral) > 0.001f;
-    };
-    const bool live = apvts.getRawParameterValue ("fftOn")->load() > 0.5f
-                      || experiment != 0
-                      || away ("pitch", 1.0f, apvts)
-                      || away ("formant", 1.0f, apvts)
-                      || away ("offsetBins", 0.0f, apvts)
-                      || away ("mulReel", 1.0f, apvts)
-                      || away ("mulImage", 1.0f, apvts)
-                      || away ("tilt", 0.0f, apvts)
-                      || away ("contrast", 1.0f, apvts)
-                      || apvts.getRawParameterValue ("gate")->load() > 0.001f
-                      || apvts.getRawParameterValue ("blur")->load() > 0.01f
-                      || away ("shift", 1.0f, apvts)
-                      || away ("shiftreel", 1.0f, apvts)
-                      || away ("shiftimage", 1.0f, apvts);
+    const bool live = apvts.getRawParameterValue ("fftOn")->load() > 0.5f;
     juce::String line;
     switch (experiment)
     {
@@ -389,10 +393,10 @@ void ChouchouFFTEQEditor::updateFftCode()
             break;
     }
     if (! live)
-        line = "bypass   // coche FFT, ou eloigne shift, mulreel, mulimage de 1\n" + line;
+        line = "bypass  //  coche FFT pour activer la chaine\n" + line;
     else if (apvts.getRawParameterValue ("autoGain")->load() > 0.5f)
         line += "\nautogain ramene le niveau : il cache mulreel";
-    fftCode.setText (line, juce::dontSendNotification);
+    fftFormula = line;
 
     bool used[12] {};
     const auto mark = [&used] (std::initializer_list<int> ids)
@@ -411,10 +415,11 @@ void ChouchouFFTEQEditor::updateFftCode()
         mark ({ 5 });
     for (int i = 0; i < 12; ++i)
     {
-        const float alpha = used[i] ? 1.0f : 0.35f;
+        const float alpha = live && used[i] ? 1.0f : 0.35f;
         knobs[(size_t) i].slider.setAlpha (alpha);
         knobs[(size_t) i].name.setAlpha (alpha);
     }
+    experimentBox.setAlpha (live ? 1.0f : 0.35f);
 }
 
 int ChouchouFFTEQEditor::shownBands() const
@@ -618,10 +623,29 @@ void ChouchouFFTEQEditor::mouseWheelMove (const juce::MouseEvent& e, const juce:
     setPlain (id, juce::jlimit (0.1f, 10.0f, q * std::pow (1.15f, wheel.deltaY * 4.0f)));
 }
 
+void ChouchouFFTEQEditor::paintFftCode (juce::Graphics& g)
+{
+    if (fftCodeArea.isEmpty())
+        return;
+    g.setColour (juce::Colour (0xfff2d56b));
+    g.setFont (juce::FontOptions (12.0f).withName (juce::Font::getDefaultMonospacedFontName()));
+    auto row = fftCodeArea;
+    for (auto line : juce::StringArray::fromLines (fftFormula))
+        g.drawText (line, row.removeFromTop (16), juce::Justification::centredLeft, true);
+}
+
 void ChouchouFFTEQEditor::drawSpectrum (juce::Graphics& g, juce::Rectangle<int> area)
 {
     g.setColour (juce::Colour (0xff14181c));
     g.fillRoundedRectangle (area.toFloat(), 6.0f);
+    g.setColour (juce::Colour (0xff2c333a));
+    for (float hz : { 100.0f, 1000.0f, 10000.0f })
+    {
+        const float x = (float) area.getX() + displayT (hz) * (float) area.getWidth();
+        g.drawVerticalLine ((int) x, (float) area.getY() + 18.0f, (float) area.getBottom() - 6.0f);
+    }
+    const float y0 = (float) area.getCentreY();
+    g.drawHorizontalLine ((int) y0, (float) area.getX() + 4.0f, (float) area.getRight() - 4.0f);
 
     const float refDb = apvts.getRawParameterValue ("anRef")->load();
     const float dbSpan = juce::jmax (6.0f, apvts.getRawParameterValue ("anDb")->load());
@@ -736,6 +760,85 @@ void ChouchouFFTEQEditor::drawSpectrum (juce::Graphics& g, juce::Rectangle<int> 
         g.strokePath (curve, juce::PathStrokeType (2.0f));
     }
 
+    if (! scNodes.empty())
+    {
+        const double sr = audioProcessor.getCurrentSampleRate();
+        const int step = scNodes.size() > 80 ? 4 : 1;
+        juce::Path action;
+        bool started = false;
+        for (int x = 0; x < area.getWidth(); x += step)
+        {
+            const float t = (float) x / (float) juce::jmax (1, area.getWidth() - 1);
+            const float hz = displayHz (t);
+            float db = 0.0f;
+            for (const auto& band : scNodes)
+                db += chouchoueq::Biquad::peak (sr, band.hz, band.q, band.db).responseDb (hz, sr);
+            db = juce::jlimit (-24.0f, 24.0f, db);
+            const float y = (float) area.getCentreY() - db / 24.0f * (float) area.getHeight() * 0.45f;
+            if (! started)
+            {
+                action.startNewSubPath ((float) (area.getX() + x), y);
+                started = true;
+            }
+            else
+                action.lineTo ((float) (area.getX() + x), y);
+        }
+        g.setColour (juce::Colour (0xff7ec8a3));
+        g.strokePath (action, juce::PathStrokeType (1.6f));
+        const bool numberThem = scNodes.size() <= 16;
+        const float radius = numberThem ? 6.0f : 3.0f;
+        for (int i = 0; i < (int) scNodes.size(); ++i)
+        {
+            const auto& band = scNodes[(size_t) i];
+            if (! numberThem && std::abs (band.db) < 0.4f)
+                continue;
+            const float x = (float) area.getX() + displayT (band.hz) * (float) area.getWidth();
+            const float y = (float) area.getCentreY() - juce::jlimit (-24.0f, 24.0f, band.db) / 24.0f * (float) area.getHeight() * 0.45f;
+            g.setColour (juce::Colour (0xff7ec8a3));
+            g.fillEllipse (x - radius, y - radius, radius * 2.0f, radius * 2.0f);
+            g.setColour (juce::Colour (0xff1c1f24));
+            g.drawEllipse (x - radius, y - radius, radius * 2.0f, radius * 2.0f, 1.0f);
+            if (numberThem)
+            {
+                g.setFont (juce::FontOptions (9.0f));
+                g.drawText (juce::String (i + 1), (int) x - 8, (int) y - 6, 16, 12, juce::Justification::centred);
+            }
+        }
+    }
+    else if (matchDb.size() > 2)
+    {
+        float extreme = 0.0f;
+        for (float v : matchDb)
+            extreme = juce::jmax (extreme, std::abs (v));
+        if (extreme > 0.05f)
+        {
+            juce::Path action;
+            bool started = false;
+            for (int x = 0; x < area.getWidth(); ++x)
+            {
+                const float t = (float) x / (float) juce::jmax (1, area.getWidth() - 1);
+                const float hz = displayHz (t);
+                const float bin = hz * (float) audioProcessor.getFftSize() / (float) audioProcessor.getCurrentSampleRate();
+                const int n = (int) matchDb.size();
+                const float pos = juce::jlimit (0.0f, (float) (n - 1), bin);
+                const int i0 = (int) pos;
+                const int i1 = juce::jmin (n - 1, i0 + 1);
+                const float frac = pos - (float) i0;
+                const float db = juce::jlimit (-24.0f, 24.0f, matchDb[(size_t) i0] * (1.0f - frac) + matchDb[(size_t) i1] * frac);
+                const float y = (float) area.getCentreY() - db / 24.0f * (float) area.getHeight() * 0.45f;
+                if (! started)
+                {
+                    action.startNewSubPath ((float) (area.getX() + x), y);
+                    started = true;
+                }
+                else
+                    action.lineTo ((float) (area.getX() + x), y);
+            }
+            g.setColour (juce::Colour (0xff7ec8a3));
+            g.strokePath (action, juce::PathStrokeType (1.6f));
+        }
+    }
+
     if (viewPage == 1 && apvts.getRawParameterValue ("anMeas")->load() > 0.5f && anFrame.fundamental > 0.0f)
     {
         g.setColour (kText.withAlpha (0.85f));
@@ -796,6 +899,19 @@ void ChouchouFFTEQEditor::drawSpectrum (juce::Graphics& g, juce::Rectangle<int> 
     g.drawText (fr ("R\u00e9f\u00e9rence"), area.getX() + 152, area.getY() + 4, 80, 14, juce::Justification::left);
     g.setColour (juce::Colour (0xfff2d56b));
     g.drawText ("Courbe EQ", area.getX() + 236, area.getY() + 4, 80, 14, juce::Justification::left);
+    g.setColour (juce::Colour (0xff7ec8a3));
+    juce::String copyName = "Copie";
+    if (! scNodes.empty())
+        copyName << "  " << (int) scNodes.size() << " bandes";
+    else if (matchDb.size() > 2)
+    {
+        float extreme = 0.0f;
+        for (float v : matchDb)
+            extreme = juce::jmax (extreme, std::abs (v));
+        if (extreme > 0.05f)
+            copyName << "  spectral";
+    }
+    g.drawText (copyName, area.getX() + 320, area.getY() + 4, 160, 14, juce::Justification::left);
 
     const int n = shownBands();
     if (n == 0)
@@ -906,6 +1022,8 @@ void ChouchouFFTEQEditor::paint (juce::Graphics& g)
         drawPhase (g);
     else
         drawSpectrum (g, spectrumArea);
+    if (viewPage == 0)
+        paintFftCode (g);
 
     if (viewPage == 0 && shownBands() > 0 && bandHeader.getHeight() > 0)
     {
@@ -995,7 +1113,7 @@ void ChouchouFFTEQEditor::resized()
     auto header = area.removeFromTop (28);
     title.setBounds (header.removeFromLeft (150));
     eqOn.setBounds (header.removeFromLeft (52));
-    fftOn.setBounds (header.removeFromLeft (52));
+    fftOn.setBounds (header.removeFromLeft (64).reduced (2, 2));
     autoGain.setBounds (header.removeFromLeft (92));
     freeze.setBounds (header.removeFromLeft (64));
     windowLabel.setBounds (header.removeFromLeft (118));
@@ -1005,7 +1123,7 @@ void ChouchouFFTEQEditor::resized()
 
     area.removeFromTop (6);
     const bool eqPage = viewPage == 0;
-    const int bottomH = eqPage ? 322 : (viewPage == 1 ? 96 : 76);
+    const int bottomH = eqPage ? 346 : (viewPage == 1 ? 96 : 76);
     auto bottom = area.removeFromBottom (bottomH);
     area.removeFromTop (4);
     spectrumArea = area;
@@ -1027,13 +1145,15 @@ void ChouchouFFTEQEditor::resized()
         k.name.setVisible (eqPage);
     }
     fftCaption.setVisible (eqPage);
-    fftCode.setVisible (eqPage);
     experimentBox.setVisible (eqPage);
     bandViewport.setVisible (eqPage && shownBands() > 0);
     scMode.setVisible (eqPage);
     scCapture.setVisible (eqPage);
     scMatch.setVisible (eqPage);
     scFollow.setVisible (eqPage);
+    scUseBands.setVisible (eqPage);
+    scBandCaption.setVisible (eqPage);
+    scBandN.setVisible (eqPage);
     amountCaption.setVisible (eqPage);
     scAmount.setVisible (eqPage);
     engineLabel.setVisible (eqPage);
@@ -1042,13 +1162,14 @@ void ChouchouFFTEQEditor::resized()
     removeBand.setVisible (eqPage);
     if (! eqPage)
     {
+        fftCodeArea = {};
         layoutBands();
         return;
     }
 
     auto expRow = bottom.removeFromTop (24);
-    bottom.removeFromTop (2);
-    fftCode.setBounds (bottom.removeFromTop (48));
+    bottom.removeFromTop (6);
+    fftCodeArea = eqPage ? bottom.removeFromTop (48) : juce::Rectangle<int>();
     bottom.removeFromTop (2);
     for (int row = 0; row < 4; ++row)
     {
@@ -1065,6 +1186,8 @@ void ChouchouFFTEQEditor::resized()
     bottom.removeFromTop (2);
     auto side = bottom.removeFromTop (24);
     bottom.removeFromTop (2);
+    auto bandRow = bottom.removeFromTop (24);
+    bottom.removeFromTop (2);
     auto inspector = bottom.removeFromTop (26);
     bottom.removeFromTop (2);
     bandHeader = bottom.removeFromTop (14);
@@ -1079,6 +1202,10 @@ void ChouchouFFTEQEditor::resized()
     scFollow.setBounds (side.removeFromLeft (130));
     amountCaption.setBounds (side.removeFromLeft (64));
     scAmount.setBounds (side.reduced (0, 3));
+
+    scUseBands.setBounds (bandRow.removeFromLeft (84));
+    scBandCaption.setBounds (bandRow.removeFromLeft (58));
+    scBandN.setBounds (bandRow.removeFromLeft (220).reduced (0, 3));
 
     engineLabel.setBounds (inspector.removeFromLeft (52));
     eqEngine.setBounds (inspector.removeFromLeft (92).reduced (0, 4));
