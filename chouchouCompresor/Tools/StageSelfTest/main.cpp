@@ -229,6 +229,19 @@ int main()
         expect (proc.getMeterGrDb() < 0.5f,
                 "COMP meter stays idle while Comp Ratio=1",
                 "gr=" + juce::String (proc.getMeterGrDb(), 2).toStdString());
+
+        std::vector<float> specMag, specGr, specBoost;
+        double specSr = 0.0;
+        int specN = 0;
+        proc.copySpectrum (specMag, specGr, specBoost, specSr, specN);
+        const int bin1k = specN > 0 ? juce::jlimit (0, (int) specBoost.size() - 1,
+                                                    (int) std::lround (1000.0 / sr * (double) specN)) : 0;
+        const int bin8k = specN > 0 ? juce::jlimit (0, (int) specBoost.size() - 1,
+                                                    (int) std::lround (8000.0 / sr * (double) specN)) : 0;
+        expect (! specBoost.empty() && specBoost[(size_t) bin1k] > 0.5f && specBoost[(size_t) bin8k] < 0.5f,
+                "The spectrum shows expansion at 1000 Hz and not at 8 kHz",
+                "1k " + std::to_string (specBoost.empty() ? 0.0f : specBoost[(size_t) bin1k])
+                    + " 8k " + std::to_string (specBoost.empty() ? 0.0f : specBoost[(size_t) bin8k]));
     }
 
     //--------------------------------------------------------------------------
@@ -471,6 +484,126 @@ int main()
         expect (std::abs (outNoComp - kLoudDb) < 1.5f,
                 "Comp thresh 0 dBFS leaves -6 dBFS sine alone",
                 "out=" + juce::String (outNoComp, 1).toStdString() + " dBFS");
+    }
+
+    proc.releaseResources();
+
+    std::cout << "\n[I] Ten frequency tessituras and waveform\n";
+    {
+        auto setAllTess = [] (NewProjectAudioProcessor& p, bool on)
+        {
+            for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
+                setParam (p, ("tess" + std::to_string (i)).c_str(), on ? 1.0f : 0.0f);
+        };
+
+        setDefaultsForIsolation (proc);
+        setParam (proc, "upratio", 1.0f);
+        setParam (proc, "downratio", 1.0f);
+        setAllTess (proc, true);
+        proc.reset();
+        const float loudAmp = juce::Decibels::decibelsToGain (-6.0f);
+        const float bypassDb = juce::Decibels::gainToDecibels (
+            steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96), -120.0f);
+
+        setParam (proc, "downratio", 8.0f);
+        setParam (proc, "highthresh", -18.0f);
+        setParam (proc, "gratk", 0.0f);
+        setParam (proc, "grrel", 0.0f);
+        setAllTess (proc, false);
+        setParam (proc, "tess5", 1.0f); // 1-2 kHz, contains 1000 Hz
+        proc.reset();
+        const float inBandDb = juce::Decibels::gainToDecibels (
+            steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96), -120.0f);
+
+        setAllTess (proc, false);
+        setParam (proc, "tess0", 1.0f); // 20-60 Hz, does not contain 1000 Hz
+        proc.reset();
+        const float outBandDb = juce::Decibels::gainToDecibels (
+            steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96), -120.0f);
+
+        expect (inBandDb < bypassDb - 1.5f,
+                "Tessitura 1-2 kHz compresses a 1000 Hz sine",
+                "bypass " + std::to_string (bypassDb) + " in " + std::to_string (inBandDb));
+        expect (std::abs (outBandDb - bypassDb) < 2.0f,
+                "A tessitura outside the tone does not compress it",
+                "bypass " + std::to_string (bypassDb) + " out " + std::to_string (outBandDb));
+        expect (proc.getTessituraGrDb (0) < 0.5f,
+                "The unused tessitura reports no reduction",
+                "gr " + std::to_string (proc.getTessituraGrDb (0)));
+
+        setAllTess (proc, false);
+        setParam (proc, "tess5", 1.0f);
+        proc.reset();
+        (void) steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96);
+
+        std::vector<float> waveIn, waveOut, waveGr;
+        proc.copyWaveform (waveIn, waveOut, waveGr);
+        float inComp = 0.0f, outComp = 0.0f, grPeak = 0.0f;
+        int compPoints = 0;
+        for (size_t i = 0; i < waveIn.size(); ++i)
+        {
+            if (waveGr[i] <= 0.5f)
+                continue;
+            ++compPoints;
+            inComp = std::max (inComp, std::abs (waveIn[i]));
+            outComp = std::max (outComp, std::abs (waveOut[i]));
+            grPeak = std::max (grPeak, waveGr[i]);
+        }
+        std::vector<float> specMag, specGr;
+        double specSr = 0.0;
+        int specN = 0;
+        proc.copySpectrum (specMag, specGr, specSr, specN);
+        const int bin1k = specN > 0 ? juce::jlimit (0, (int) specGr.size() - 1,
+                                                    (int) std::lround (1000.0 / sr * (double) specN)) : 0;
+        const int bin8k = specN > 0 ? juce::jlimit (0, (int) specGr.size() - 1,
+                                                    (int) std::lround (8000.0 / sr * (double) specN)) : 0;
+        expect (! specGr.empty() && specGr[(size_t) bin1k] > 0.5f && specGr[(size_t) bin8k] < 0.5f,
+                "The spectrum shows compression at 1000 Hz and not at 8 kHz",
+                "1k " + std::to_string (specGr.empty() ? 0.0f : specGr[(size_t) bin1k])
+                    + " 8k " + std::to_string (specGr.empty() ? 0.0f : specGr[(size_t) bin8k]));
+
+        expect (! waveIn.empty() && compPoints > 8 && grPeak > 0.5f && outComp < inComp,
+                "Waveform shows the input, the output, and where compression happens",
+                "n " + std::to_string (waveIn.size()) + " points " + std::to_string (compPoints)
+                    + " in " + std::to_string (inComp) + " out " + std::to_string (outComp)
+                    + " gr " + std::to_string (grPeak));
+        expect (proc.getTessituraGrDb (5) > 0.5f,
+                "The selected tessitura reports the reduction",
+                "gr " + std::to_string (proc.getTessituraGrDb (5)));
+
+        setParam (proc, "downratio", 1.0f);
+        setParam (proc, "upratio", 8.0f);
+        setParam (proc, "lowthresh", -3.0f);
+        setParam (proc, "boostatk", 0.0f);
+        setParam (proc, "boostrel", 0.0f);
+        setAllTess (proc, false);
+        setParam (proc, "tess5", 1.0f);
+        proc.reset();
+        (void) steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96);
+        std::vector<float> expMag, expGr, expBoost;
+        proc.copySpectrum (expMag, expGr, expBoost, specSr, specN);
+        const int expBin1k = specN > 0 ? juce::jlimit (0, (int) expBoost.size() - 1,
+                                                       (int) std::lround (1000.0 / sr * (double) specN)) : 0;
+        const int expBin8k = specN > 0 ? juce::jlimit (0, (int) expBoost.size() - 1,
+                                                       (int) std::lround (8000.0 / sr * (double) specN)) : 0;
+        expect (proc.getTessituraBoostDb (5) > 0.5f
+                    && ! expBoost.empty()
+                    && expBoost[(size_t) expBin1k] > 0.5f
+                    && expBoost[(size_t) expBin8k] < 0.5f,
+                "Tessitura 1-2 kHz expands a 1000 Hz sine and not 8 kHz",
+                "band " + std::to_string (proc.getTessituraBoostDb (5))
+                    + " 1k " + std::to_string (expBoost.empty() ? 0.0f : expBoost[(size_t) expBin1k]));
+
+        setAllTess (proc, false);
+        setParam (proc, "tess0", 1.0f);
+        proc.reset();
+        (void) steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96);
+        proc.copySpectrum (expMag, expGr, expBoost, specSr, specN);
+        expect (proc.getTessituraBoostDb (5) < 0.5f
+                    && (expBoost.empty() || expBoost[(size_t) expBin1k] < 0.5f),
+                "A tessitura outside the tone does not expand it",
+                "band " + std::to_string (proc.getTessituraBoostDb (5))
+                    + " 1k " + std::to_string (expBoost.empty() ? 0.0f : expBoost[(size_t) expBin1k]));
     }
 
     proc.releaseResources();

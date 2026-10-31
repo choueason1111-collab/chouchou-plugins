@@ -14,8 +14,10 @@
 
 #include <JuceHeader.h>
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 //==============================================================================
@@ -92,6 +94,39 @@ public:
     float getMeterScDb() const noexcept { return meterScDb.load (std::memory_order_relaxed); }
     bool isSidechainConnected() const noexcept { return sidechainConnected.load (std::memory_order_relaxed); }
 
+    static constexpr int kTessituras = 10;
+    static constexpr int kWavePoints = 512;
+
+    /** Recent input, output, and compression amount in dB (0 = no reduction). */
+    void copyWaveform (std::vector<float>& input,
+                       std::vector<float>& output,
+                       std::vector<float>& compressionDb) const;
+
+    void copySpectrum (std::vector<float>& magnitudeDb,
+                       std::vector<float>& reductionDb,
+                       double& sampleRate,
+                       int& fftSizeOut) const;
+
+    void copySpectrum (std::vector<float>& magnitudeDb,
+                       std::vector<float>& reductionDb,
+                       std::vector<float>& expansionDb,
+                       double& sampleRate,
+                       int& fftSizeOut) const;
+
+    float getTessituraGrDb (int index) const noexcept
+    {
+        if (index < 0 || index >= kTessituras)
+            return 0.0f;
+        return tessMeter[(size_t) index].load (std::memory_order_relaxed);
+    }
+
+    float getTessituraBoostDb (int index) const noexcept
+    {
+        if (index < 0 || index >= kTessituras)
+            return 0.0f;
+        return tessBoostMeter[(size_t) index].load (std::memory_order_relaxed);
+    }
+
     /** Bumps every processBlock; editor uses this to detect host pause (no callbacks). */
     uint32_t getProcessCounter() const noexcept { return processCounter.load (std::memory_order_relaxed); }
 
@@ -142,6 +177,7 @@ private:
 
         bool useBoostSc = false;  // Already false when no sidechain is connected
         bool useCompSc = false;
+        bool tessOn[kTessituras] = { true, true, true, true, true, true, true, true, true, true };
     };
 
     void applyFftSizeFromParameter (bool forceRebuild);
@@ -189,6 +225,21 @@ private:
     std::atomic<float> meterScDb { -120.0f };
     std::atomic<bool> sidechainConnected { false };
     std::atomic<uint32_t> processCounter { 0 };
+    std::array<std::atomic<float>, kTessituras> tessMeter;
+    std::array<std::atomic<float>, kTessituras> tessBoostMeter;
+    std::array<float, kTessituras> tessAccum {};
+    std::array<float, kTessituras> tessBoostAccum {};
+
+    std::array<float, kWavePoints> waveIn {}, waveOut {}, waveGr {};
+    int wavePos = 0;
+    int waveCount = 0;
+    int waveHold = 0;
+    float liveGrDb = 0.0f;
+    mutable std::mutex waveMutex;
+    std::vector<float> specMag, specGr, specBoost, pubMag, pubGr, pubBoost;
+    double specSr = 48000.0;
+    int specFft = 2048;
+    bool captureSpectrum = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewProjectAudioProcessor)
 };

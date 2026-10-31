@@ -1,0 +1,26 @@
+chouchou plugins - AAX for Pro Tools, Windows 10/11 (64-bit)
+=============================================================
+
+安裝（中文）
+1. 解壓縮這個 zip。
+2. 把 AAX 資料夾裡的全部 .aaxplugin 複製到：
+       C:\Program Files\Common Files\Avid\Audio\Plug-Ins
+   （可能需要系統管理員權限）
+3. 重新開啟 Pro Tools。插件已通過 PACE 簽名，可在正式版 Pro Tools 使用。
+4. 如果 Windows 顯示 SmartScreen 警告：按「其他資訊」→「仍要執行／仍要保留」。
+
+這些插件使用自我簽署的 Windows 程式碼簽章憑證；PACE（Avid）簽名才是 Pro Tools 載入所需的。
+若 Pro Tools 仍拒絕載入，請回報 issue。
+
+Install (English)
+1. Unzip this archive.
+2. Copy every .aaxplugin folder from the AAX folder to:
+       C:\Program Files\Common Files\Avid\Audio\Plug-Ins
+   (you may need administrator rights)
+3. Restart Pro Tools. The plugins are PACE-signed for commercial Pro Tools.
+4. If Windows SmartScreen warns: More info -> Run anyway / Keep.
+
+The Windows Authenticode certificate is self-signed; Pro Tools requires the PACE signature, which is present.
+If a plugin still fails to load, please open a GitHub issue.
+
+License: AGPL-3.0 — https://github.com/choueason1111-collab/chouchou-plugins

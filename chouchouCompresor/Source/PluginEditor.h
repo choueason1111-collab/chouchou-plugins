@@ -10,6 +10,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <array>
 #include <cstdint>
 #include "PluginProcessor.h"
 
@@ -67,6 +68,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseMove (const juce::MouseEvent&) override;
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -78,6 +80,9 @@ private:
     void updateFftButtons();
     void setFftChoice (int index);
     void setupKnob (juce::Slider& s, juce::Label& l, const juce::String& text, juce::Colour fill);
+    void paintWaveform (juce::Graphics& g, juce::Rectangle<int> area);
+    void paintSpectrum (juce::Graphics& g, juce::Rectangle<int> area);
+    juce::String compressedSummary() const;
 
     NewProjectAudioProcessor& audioProcessor;
 
@@ -101,7 +106,7 @@ private:
 
     juce::TextButton fft512 { "512" }, fft1024 { "1024" }, fft2048 { "2048" }, fft4096 { "4096" };
 
-    juce::ToggleButton boostScButton { "SC" }, compScButton { "SC" };
+    juce::ToggleButton boostScButton { "Sidechain" }, compScButton { "Sidechain" };
     juce::Label scTitle;
 
     MeterBar boostMeter, grMeter, inMeter, scMeter;
@@ -116,6 +121,17 @@ private:
                                       mixAttachment, makeupAttachment;
 
     std::unique_ptr<ButtonAttachment> boostScAttachment, compScAttachment;
+    std::array<juce::TextButton, NewProjectAudioProcessor::kTessituras> tessButtons;
+    std::array<std::unique_ptr<ButtonAttachment>, NewProjectAudioProcessor::kTessituras> tessAttachments;
+
+    std::vector<float> waveIn, waveOut, waveGr, specMag, specGr, specBoost;
+    double specSr = 48000.0;
+    int specFft = 2048;
+    juce::TextButton viewButton { "Onde" };
+    bool showSpectrum = true;
+    bool cursorOn = false;
+    juce::Point<float> cursorPos;
+    juce::Rectangle<int> waveBounds;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewProjectAudioProcessorEditor)
 };

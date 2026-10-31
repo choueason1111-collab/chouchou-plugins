@@ -1,0 +1,133 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include <array>
+#include <atomic>
+#include <mutex>
+#include <vector>
+#include "EqFilters.h"
+#include "DisplayAnalyser.h"
+
+class ChouchouFFTEQAudioProcessor : public juce::AudioProcessor
+{
+public:
+    static constexpr int kMaxBands = chouchoueq::kMaxBands;
+    static constexpr int kMaxFftOrder = 12;
+    static constexpr int kMaxFftSize = 1 << kMaxFftOrder;
+    static constexpr int kMaxBins = kMaxFftSize / 2 + 1;
+
+    ChouchouFFTEQAudioProcessor();
+    ~ChouchouFFTEQAudioProcessor() override;
+
+    void prepareToPlay (double sampleRate, int samplesPerBlock) override;
+    void releaseResources() override;
+
+#ifndef JucePlugin_PreferredChannelConfigurations
+    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
+#endif
+
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+
+    juce::AudioProcessorEditor* createEditor() override;
+    bool hasEditor() const override;
+
+    const juce::String getName() const override;
+    bool acceptsMidi() const override;
+    bool producesMidi() const override;
+    bool isMidiEffect() const override;
+    double getTailLengthSeconds() const override;
+
+    int getNumPrograms() override;
+    int getCurrentProgram() override;
+    void setCurrentProgram (int) override;
+    const juce::String getProgramName (int) override;
+    void changeProgramName (int, const juce::String&) override;
+
+    void getStateInformation (juce::MemoryBlock& destData) override;
+    void setStateInformation (const void* data, int sizeInBytes) override;
+
+    juce::AudioProcessorValueTreeState& getAPVTS() noexcept { return apvts; }
+
+    int getFftSize() const noexcept { return fftSize; }
+    int getNumBins() const noexcept { return nBins; }
+    double getCurrentSampleRate() const noexcept { return currentSampleRate; }
+    float responseDb (double hz) const noexcept { return eq.responseDb (hz); }
+
+    void copySpectra (std::vector<float>& mainMag,
+                      std::vector<float>& sidechainMag,
+                      std::vector<float>& referenceMag) const;
+
+    float getMatchPeakHz() const noexcept { return matchPeakHz.load (std::memory_order_relaxed); }
+    int getAnalysisHops() const noexcept { return analysisHops.load (std::memory_order_relaxed); }
+
+    void setDisplayOpen (bool open) noexcept { displayOpen.store (open, std::memory_order_relaxed); }
+    void pumpDisplays();
+    DisplayAnalyser::Frame copyAnalyser() const { return displayAnalyser.copy(); }
+    PhaseCapture::Frame copyPhase() const { return phaseCapture.copy(); }
+
+private:
+    static juce::AudioProcessorValueTreeState::ParameterLayout makeParams();
+
+    struct Chan
+    {
+        std::vector<float> inRing, outRing, frame, spectrum;
+        std::vector<float> mag, phase, frozenMag, frozenPhase;
+        std::vector<float> dryDelay, bypassDelay;
+        int writePos = 0, hop = 0, dryPos = 0, bypassPos = 0;
+        bool hasFreeze = false;
+    };
+
+    struct Analyser
+    {
+        std::vector<float> ring, spectrum, mag;
+        int writePos = 0, hop = 0;
+    };
+
+    void applyFftSize (int choice, bool force);
+    void clearChan (Chan& c);
+    void ensureSizes();
+    float readDelay (std::vector<float>& d, int& pos, float x, int length) const noexcept;
+    void readPolar (const std::vector<float>& spectrum, int idx, float& mag, float& phase) const noexcept;
+    void writePolar (std::vector<float>& spectrum, int idx, float mag, float phase) const noexcept;
+    void processEffectFrame (Chan& c, const float* scMag);
+    void processAnalysis (Analyser& a, std::vector<float>& dest);
+
+    juce::AudioProcessorValueTreeState apvts;
+    chouchoueq::GraphicEq eq;
+    DisplayAnalyser displayAnalyser;
+    PhaseCapture phaseCapture;
+    std::atomic<bool> displayOpen { false };
+    std::vector<float> displayL, displayR, displaySc;
+
+    juce::dsp::FFT fft512  { 9 };
+    juce::dsp::FFT fft1024 { 10 };
+    juce::dsp::FFT fft2048 { 11 };
+    juce::dsp::FFT fft4096 { 12 };
+    juce::dsp::WindowingFunction<float> hann512  { 512,  juce::dsp::WindowingFunction<float>::hann };
+    juce::dsp::WindowingFunction<float> hann1024 { 1024, juce::dsp::WindowingFunction<float>::hann };
+    juce::dsp::WindowingFunction<float> hann2048 { 2048, juce::dsp::WindowingFunction<float>::hann };
+    juce::dsp::WindowingFunction<float> hann4096 { 4096, juce::dsp::WindowingFunction<float>::hann };
+
+    int fftOrder = 10, fftSize = 1024, hopSize = 256, nBins = 513;
+    int dryDelayLength = 1024;
+    double currentSampleRate = 48000.0;
+    float agCoeff = 0.01f;
+    float inPower = 1.0e-8f, wetPower = 1.0e-8f;
+
+    std::array<Chan, 2> channels;
+    Analyser mainAnalyser, scAnalyser;
+    std::vector<float> reference, scLive, mainLive;
+    std::vector<float> envA, envB, tmpMag, tmpPhase;
+    bool lastCapture = false;
+    bool referenceValid = false;
+
+    mutable std::mutex spectrumMutex;
+    std::vector<float> pubMain, pubSc, pubRef;
+    std::atomic<float> matchPeakHz { 0.0f };
+    std::atomic<int> analysisHops { 0 };
+
+    juce::dsp::FFT& currentFft() noexcept;
+    juce::dsp::WindowingFunction<float>& currentHann() noexcept;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChouchouFFTEQAudioProcessor)
+};
