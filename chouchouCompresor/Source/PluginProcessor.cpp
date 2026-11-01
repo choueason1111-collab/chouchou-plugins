@@ -59,7 +59,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NewProjectAudioProcessor::cr
 
     // --- Stage 1: BOOST ---
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "lowthresh", 6 }, "Seuil expander",
+        juce::ParameterID { "lowthresh", 6 }, "Expander threshold",
         juce::NormalisableRange<float> { -120.0f, 0.0f, 0.1f }, -50.0f,
         juce::AudioParameterFloatAttributes().withLabel ("dBFS")));
 
@@ -68,22 +68,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout NewProjectAudioProcessor::cr
         juce::NormalisableRange<float> { 1.0f, 20.0f, 0.01f, 0.4f }, 2.0f));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "boostatk", 5 }, "Attaque expander",
+        juce::ParameterID { "boostatk", 5 }, "Expander attack",
         juce::NormalisableRange<float> { 0.0f, 500.0f, 0.01f, 0.35f }, 20.0f,
         juce::AudioParameterFloatAttributes().withLabel ("ms")));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "boostrel", 5 }, "Relachement expander",
+        juce::ParameterID { "boostrel", 5 }, "Expander release",
         juce::NormalisableRange<float> { 0.0f, 2000.0f, 0.01f, 0.3f }, 200.0f,
         juce::AudioParameterFloatAttributes().withLabel ("ms")));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "boostspeed", 5 }, "Vitesse expander",
+        juce::ParameterID { "boostspeed", 5 }, "Expander speed",
         juce::NormalisableRange<float> { 0.0f, 100.0f, 0.1f }, 50.0f));
 
     // --- Stage 2: COMP ---
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "highthresh", 6 }, "Seuil compression",
+        juce::ParameterID { "highthresh", 6 }, "Compressor threshold",
         juce::NormalisableRange<float> { -80.0f, 12.0f, 0.1f }, -18.0f,
         juce::AudioParameterFloatAttributes().withLabel ("dBFS")));
 
@@ -92,31 +92,31 @@ juce::AudioProcessorValueTreeState::ParameterLayout NewProjectAudioProcessor::cr
         juce::NormalisableRange<float> { 1.0f, 20.0f, 0.01f, 0.4f }, 4.0f));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "gratk", 5 }, "Attaque compression",
+        juce::ParameterID { "gratk", 5 }, "Compressor attack",
         juce::NormalisableRange<float> { 0.0f, 500.0f, 0.01f, 0.35f }, 10.0f,
         juce::AudioParameterFloatAttributes().withLabel ("ms")));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "grrel", 5 }, "Relachement compression",
+        juce::ParameterID { "grrel", 5 }, "Compressor release",
         juce::NormalisableRange<float> { 0.0f, 2000.0f, 0.01f, 0.3f }, 120.0f,
         juce::AudioParameterFloatAttributes().withLabel ("ms")));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "compspeed", 5 }, "Vitesse compression",
+        juce::ParameterID { "compspeed", 5 }, "Compressor speed",
         juce::NormalisableRange<float> { 0.0f, 100.0f, 0.1f }, 50.0f));
 
     // --- Stage 3: MIX / output ---
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "mix", 5 }, "Melange",
+        juce::ParameterID { "mix", 5 }, "Mix",
         juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 1.0f));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "makeup", 5 }, "Gain de sortie",
+        juce::ParameterID { "makeup", 5 }, "Output",
         juce::NormalisableRange<float> { -24.0f, 24.0f, 0.1f }, 0.0f,
         juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
-        juce::ParameterID { "fftsize", 5 }, "Taille de fenetre",
+        juce::ParameterID { "fftsize", 5 }, "Window size",
         juce::StringArray { "512", "1024", "2048", "4096" },
         2));
 

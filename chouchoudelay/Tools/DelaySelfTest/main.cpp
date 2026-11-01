@@ -498,6 +498,96 @@ int main()
         expect (maxJump < 0.25f, "No discontinuities while parameters change", "max step=" + num (maxJump, 4) + " peak=" + num (peak, 3));
     }
 
+    // -------------------------------------------------------------------------
+    std::cout << "\n[8] Pan, tap tempo, rhythms, real-time tempo\n";
+    {
+        Proc p;
+        configure (p, 1, 0.1f, 60.0f, 100.0f);
+        setParam (p, Proc::idPan (1), -1.0f);
+        p.prepareToPlay (kSr, kBs);
+        std::vector<float> right;
+        auto left = render (p, impulse (8000), &right);
+        expect (left[4800] > 0.5f && std::abs (right[4800]) < 1.0e-5f, "Pan full left: echo on the left only",
+                "L=" + num (left[4800]) + " R=" + num (right[4800], 8));
+    }
+    {
+        Proc p;
+        configure (p, 1, 0.1f, 60.0f, 100.0f);
+        setParam (p, Proc::idPan (1), 1.0f);
+        p.prepareToPlay (kSr, kBs);
+        std::vector<float> right;
+        auto left = render (p, impulse (8000), &right);
+        expect (std::abs (left[4800]) < 1.0e-5f && right[4800] > 0.5f, "Pan full right: echo on the right only",
+                "L=" + num (left[4800], 8) + " R=" + num (right[4800]));
+    }
+    {
+        Proc p;
+        configure (p, 1, 0.1f, 60.0f, 100.0f);
+        setParam (p, Proc::idRhythm (1), 0.0f);
+        setParam (p, Proc::idRhythmCount (1), 1.0f);
+        p.prepareToPlay (kSr, kBs);
+        expect (std::abs (p.getEchoDelaySamples (1) - 4800.0) < 1.0, "Manuel ignores the rhythm and keeps the interval",
+                "d=" + num (p.getEchoDelaySamples (1), 1));
+    }
+    {
+        Proc p;
+        configure (p, 3, 0.25f, 60.0f, 100.0f);
+        setParam (p, "tempoMode", 2.0f);
+        p.tapTempo();
+        juce::Thread::sleep (500);
+        p.tapTempo();
+        p.prepareToPlay (kSr, kBs);
+        expect (std::abs (p.getTapBpm() - 120.0f) < 8.0f, "Two taps 500 ms apart read about 120 BPM",
+                num (p.getTapBpm(), 1) + " BPM");
+        setParam (p, Proc::idRhythm (1), 1.0f);
+        setParam (p, Proc::idRhythmCount (1), 1.0f);
+        setParam (p, Proc::idRhythm (2), 0.0f);
+        setParam (p, Proc::idRhythmCount (2), 1.0f);
+        setParam (p, Proc::idRhythm (3), 5.0f);
+        setParam (p, Proc::idRhythmCount (3), 1.0f);
+        const double d1 = p.getEchoDelaySamples (1);
+        const double d2 = p.getEchoDelaySamples (2);
+        const double d3 = p.getEchoDelaySamples (3);
+        expect (std::abs (d1 - 0.5 * kSr) < 800.0, "Espace: echo 1 noire is one beat", "d=" + num (d1, 0));
+        expect (std::abs (d2 - 1.0 * kSr) < 1600.0, "Espace: echo 2 blanche is two beats", "d=" + num (d2, 0));
+        expect (std::abs (d3 - kSr / 32.0) < 80.0, "Espace: echo 3 quadruple croche is 1/64", "d=" + num (d3, 0));
+
+        setParam (p, Proc::idRhythm (1), 2.0f);
+        setParam (p, Proc::idRhythmCount (1), 1.0f);
+        setParam (p, Proc::idTuplet (1), 1.0f);
+        const double triplet = p.getEchoDelaySamples (1);
+        const double beatSamples = 60.0 / (double) p.getCurrentBpm() * kSr;
+        const double eighthTriplet = beatSamples * 0.5 * (2.0 / 3.0);
+        expect (std::abs (triplet - eighthTriplet) < 40.0, "Triplet eighth is 2/3 of a straight eighth",
+                "d=" + num (triplet, 0));
+
+        setParam (p, Proc::idTuplet (1), 2.0f);
+        const double quin = p.getEchoDelaySamples (1);
+        const double eighthQuin = beatSamples * 0.5 * (4.0 / 5.0);
+        expect (std::abs (quin - eighthQuin) < 40.0, "Quintuplet eighth is 4/5 of a straight eighth",
+                "d=" + num (quin, 0));
+
+        setParam (p, Proc::idRhythm (1), 1.0f);
+        setParam (p, Proc::idRhythmCount (1), 1.0f);
+        setParam (p, Proc::idTuplet (1), 0.0f);
+        auto out = render (p, impulse (52000));
+        const size_t k1 = (size_t) std::llround (d1);
+        expect (out[k1] > 0.5f, "The noire echo is audible at its rhythmic time", "o=" + num (out[k1]));
+    }
+    {
+        Proc p;
+        configure (p, 1, 0.25f, 60.0f, 100.0f);
+        setParam (p, "tempoMode", 1.0f);
+        p.prepareToPlay (kSr, kBs);
+        std::vector<float> clicks ((size_t) (kSr * 6.0), 0.0f);
+        const int period = (int) std::lround (0.6 * kSr);
+        for (int i = 0; i + 8 < (int) clicks.size(); i += period)
+            clicks[(size_t) i] = 1.0f;
+        render (p, clicks);
+        expect (std::abs (p.getDetectedBpm() - 100.0f) < 6.0f, "Temps reel locks onto clicks at 100 BPM",
+                num (p.getDetectedBpm(), 1) + " BPM");
+    }
+
     std::cout << "\n=== Result: " << (gFails == 0 ? "ALL PASS" : "FAILURES") << " (" << gFails << " failed) ===\n\n";
     return gFails == 0 ? 0 : 1;
 }

@@ -5,8 +5,6 @@
 
 namespace
 {
-inline juce::String panelText (const char* s) { return juce::String (juce::CharPointer_UTF8 (s)); }
-
 inline void stylePanelSlider (juce::Slider& s)
 {
     s.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -30,32 +28,32 @@ class AnalyserControls : public juce::Component
 public:
     explicit AnalyserControls (juce::AudioProcessorValueTreeState& state) : apvts (state)
     {
-        addSlider (overlap, overlapAtt, "anOverlap", "Recouvrement");
-        addSlider (average, averageAtt, "anAvg", "Moyenne");
-        addSlider (smooth, smoothAtt, "anSmooth", "Lissage");
-        addSlider (rate, rateAtt, "anRate", "Rafraichissement");
-        addSlider (minHz, minAtt, "anMin", panelText ("Fr\u00e9quence min"));
-        addSlider (maxHz, maxAtt, "anMax", panelText ("Fr\u00e9quence max"));
-        addSlider (dbRange, dbAtt, "anDb", "Plage dB");
-        addSlider (refLevel, refAtt, "anRef", panelText ("Niveau r\u00e9f."));
-        addSlider (ampRange, ampAtt, "anAmp", "Plage amplitude");
+        addSlider (overlap, overlapAtt, "anOverlap", "Overlap");
+        addSlider (average, averageAtt, "anAvg", "Average");
+        addSlider (smooth, smoothAtt, "anSmooth", "Smoothing");
+        addSlider (rate, rateAtt, "anRate", "Refresh");
+        addSlider (minHz, minAtt, "anMin", "Min Hz");
+        addSlider (maxHz, maxAtt, "anMax", "Max Hz");
+        addSlider (dbRange, dbAtt, "anDb", "dB range");
+        addSlider (refLevel, refAtt, "anRef", "Ref level");
+        addSlider (ampRange, ampAtt, "anAmp", "Amp range");
 
-        addChoice (fftBox, fftAtt, "anFft", "Taille FFT");
-        addChoice (winBox, winAtt, "anWin", panelText ("Fen\u00eatre"));
+        addChoice (fftBox, fftAtt, "anFft", "FFT size");
+        addChoice (winBox, winAtt, "anWin", "Window");
         addChoice (padBox, padAtt, "anPad", "Zero padding");
         addChoice (modeBox, modeAtt, "anMode", "Mode");
-        addChoice (freqScale, freqAtt, "anFreqScale", panelText ("\u00c9chelle fr\u00e9q."));
-        addChoice (ampScale, ampScaleAtt, "anAmpScale", panelText ("\u00c9chelle amp."));
-        addChoice (channel, chanAtt, "anChan", "Canal");
+        addChoice (freqScale, freqAtt, "anFreqScale", "Freq scale");
+        addChoice (ampScale, ampScaleAtt, "anAmpScale", "Amp scale");
+        addChoice (channel, chanAtt, "anChan", "Channel");
 
-        addToggle (analysis, anAtt, "anOn", "Analyse");
-        addToggle (snap, snapAtt, "anSnap", "Calage notes");
-        addToggle (notes, notesAtt, "anNotes", "Nom de note");
-        addToggle (measures, measAtt, "anMeas", "Mesures");
-        addToggle (diff, diffAtt, "anDiff", panelText ("Diff\u00e9rence"));
+        addToggle (analysis, anAtt, "anOn", "Analysis");
+        addToggle (snap, snapAtt, "anSnap", "Snap notes");
+        addToggle (notes, notesAtt, "anNotes", "Note name");
+        addToggle (measures, measAtt, "anMeas", "Measures");
+        addToggle (diff, diffAtt, "anDiff", "Difference");
         addToggle (sidechain, scAtt, "anSc", "Sidechain");
 
-        capRef.setButtonText (panelText ("R\u00e9f\u00e9rence"));
+        capRef.setButtonText ("Reference");
         capA.setButtonText ("A");
         capB.setButtonText ("B");
         addAndMakeVisible (capRef);
@@ -155,20 +153,20 @@ class PhaseControls : public juce::Component
 public:
     explicit PhaseControls (juce::AudioProcessorValueTreeState& state) : apvts (state)
     {
-        addSlider (gain, gainAtt, "phGain", "Gain affichage");
-        addSlider (decay, decayAtt, "phDecay", "Extinction");
-        addSlider (persist, persistAtt, "phPersist", "Persistance");
+        addSlider (gain, gainAtt, "phGain", "Display gain");
+        addSlider (decay, decayAtt, "phDecay", "Decay");
+        addSlider (persist, persistAtt, "phPersist", "Persistence");
         addSlider (rotation, rotAtt, "phRot", "Rotation");
         addSlider (zoom, zoomAtt, "phZoom", "Zoom");
-        addSlider (scaleX, xAtt, "phScaleX", "Echelle X");
-        addSlider (scaleY, yAtt, "phScaleY", "Echelle Y");
-        addSlider (thick, thickAtt, "phThick", panelText ("\u00c9paisseur"));
-        addSlider (bright, brightAtt, "phBright", panelText ("Luminosit\u00e9"));
+        addSlider (scaleX, xAtt, "phScaleX", "Scale X");
+        addSlider (scaleY, yAtt, "phScaleY", "Scale Y");
+        addSlider (thick, thickAtt, "phThick", "Thickness");
+        addSlider (bright, brightAtt, "phBright", "Brightness");
         addChoice (mode, modeAtt, "phMode", "Mode");
-        addChoice (input, inputAtt, "phInput", panelText ("Entr\u00e9e"));
+        addChoice (input, inputAtt, "phInput", "Input");
         addToggle (enabled, onAtt, "phOn", "Phase");
-        addToggle (grid, gridAtt, "phGrid", "Grille");
-        addToggle (freeze, freezeAtt, "phFreeze", "Figer");
+        addToggle (grid, gridAtt, "phGrid", "Grid");
+        addToggle (freeze, freezeAtt, "phFreeze", "Freeze");
     }
 
     void resized() override

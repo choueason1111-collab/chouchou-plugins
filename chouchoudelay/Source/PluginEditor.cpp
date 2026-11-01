@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace chouchou_delay_ui;
@@ -62,6 +63,14 @@ DelayLookAndFeel::DelayLookAndFeel()
     setColour (juce::ToggleButton::textColourId, kText);
     setColour (juce::ToggleButton::tickColourId, kAccent);
     setColour (juce::ToggleButton::tickDisabledColourId, kTextDim);
+    setColour (juce::ComboBox::backgroundColourId, kPanelHi);
+    setColour (juce::ComboBox::textColourId, kText);
+    setColour (juce::ComboBox::outlineColourId, kTextDim);
+    setColour (juce::ComboBox::arrowColourId, kAccent);
+    setColour (juce::PopupMenu::backgroundColourId, kPanel);
+    setColour (juce::PopupMenu::textColourId, kText);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, kAccent.darker (0.4f));
+    setColour (juce::PopupMenu::highlightedTextColourId, kText);
 }
 
 void DelayLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
@@ -165,31 +174,70 @@ void TimelineView::paint (juce::Graphics& g)
     g.setColour (kTextDim.withAlpha (0.6f));
     g.strokePath (curve, juce::PathStrokeType (1.2f));
 
-    const float barW = juce::jlimit (2.0f, 14.0f, plot.getWidth() / (float) (count * 2 + 1));
+    struct Mark
+    {
+        int echo = 0;
+        float trueX = 0.0f;
+        float drawX = 0.0f;
+        float top = 0.0f;
+        bool audible = false;
+        juce::Colour colour { 0xff4fd1c5 };
+    };
+    std::vector<Mark> marks;
+    marks.reserve ((size_t) count);
+    const float barW = juce::jlimit (3.0f, 12.0f, plot.getWidth() / (float) (count * 2 + 1));
     for (int e = 1; e <= count; ++e)
     {
-        const float x = timeToX (proc.getEchoTimeSeconds (e));
+        Mark m;
+        m.echo = e;
+        m.trueX = timeToX (proc.getEchoTimeSeconds (e));
+        m.drawX = m.trueX;
         const float gain = proc.getEchoTotalGain (e);
-        const auto colour = pitchColour (proc.getEchoPitchSemitones (e));
+        m.audible = gain > 0.0f;
+        m.top = m.audible ? dbToY (juce::Decibels::gainToDecibels (gain)) : plot.getBottom() - 8.0f;
+        m.colour = pitchColour (proc.getEchoPitchSemitones (e));
+        marks.push_back (m);
+    }
+    std::sort (marks.begin(), marks.end(), [] (const Mark& a, const Mark& b) { return a.trueX < b.trueX; });
 
-        if (gain > 0.0f)
+    const float gap = barW + 4.0f;
+    for (size_t i = 0; i < marks.size();)
+    {
+        size_t j = i + 1;
+        while (j < marks.size() && marks[j].trueX - marks[i].trueX < gap * (float) (j - i))
+            ++j;
+        const float centre = 0.5f * (marks[i].trueX + marks[j - 1].trueX);
+        const float span = gap * (float) (j - i);
+        float start = centre - span * 0.5f + gap * 0.5f;
+        const float left = plot.getX() + barW * 0.5f;
+        const float right = plot.getRight() - span + gap * 0.5f;
+        start = right > left ? juce::jlimit (left, right, start) : left;
+        for (size_t k = i; k < j; ++k)
+            marks[k].drawX = start + gap * (float) (k - i);
+        i = j;
+    }
+
+    g.setFont (juce::FontOptions (11.0f));
+    for (const auto& m : marks)
+    {
+        if (std::abs (m.drawX - m.trueX) > 2.0f)
         {
-            const float y = dbToY (juce::Decibels::gainToDecibels (gain));
-            g.setColour (colour);
-            g.fillRoundedRectangle (x - barW * 0.5f, y, barW, plot.getBottom() - y, 2.0f);
+            g.setColour (m.colour.withAlpha (0.45f));
+            g.drawLine (m.trueX, plot.getBottom(), m.drawX, m.top, 1.0f);
+        }
+        if (m.audible)
+        {
+            g.setColour (m.colour);
+            g.fillRoundedRectangle (m.drawX - barW * 0.5f, m.top, barW, plot.getBottom() - m.top, 2.0f);
         }
         else
         {
             g.setColour (kTextDim.withAlpha (0.5f));
-            g.drawRoundedRectangle (x - barW * 0.5f, plot.getBottom() - 8.0f, barW, 8.0f, 2.0f, 1.0f);
+            g.drawRoundedRectangle (m.drawX - barW * 0.5f, plot.getBottom() - 8.0f, barW, 8.0f, 2.0f, 1.0f);
         }
-
-        if (barW >= 8.0f || count <= 16)
-        {
-            g.setColour (kTextDim);
-            g.drawText (juce::String (e), juce::Rectangle<float> (x - 12.0f, plot.getY() - 2.0f, 24.0f, 12.0f),
-                        juce::Justification::centred);
-        }
+        g.setColour (kText);
+        g.drawText (juce::String (m.echo), juce::Rectangle<float> (m.drawX - 12.0f, plot.getY() - 1.0f, 24.0f, 12.0f),
+                    juce::Justification::centred);
     }
 }
 
@@ -232,14 +280,29 @@ void EchoCell::paint (juce::Graphics& g)
 
     const float lvlDb = proc.getAPVTS().getRawParameterValue (ChouchouDelayAudioProcessor::idLevel (echo))->load();
     const auto lvl = lvlDb <= ChouchouDelayAudioProcessor::kLevelFloorDb ? juce::String ("-inf") : signedString (lvlDb, 1);
+    const float pan = proc.getEchoPan (echo);
+
+    auto bar = text.removeFromBottom (7.0f).reduced (2.0f, 1.0f);
+    g.setColour (kPanelHi);
+    g.fillRoundedRectangle (bar, 2.0f);
+    const float x = bar.getX() + (pan + 1.0f) * 0.5f * bar.getWidth();
+    g.setColour (on ? kAccent : kTextDim);
+    g.fillRoundedRectangle (juce::Rectangle<float> (x - 2.0f, bar.getY(), 4.0f, bar.getHeight()), 1.0f);
 
     g.setFont (juce::FontOptions (11.0f));
     g.setColour (on ? kText.withAlpha (0.85f) : kTextDim);
     const float lineH = juce::jmin (15.0f, text.getHeight() / 3.0f);
     const bool wholeSemis = std::abs (semis - std::round (semis)) < 1.0e-6;
+    static const char* shortNote[] = { "1/2", "1/4", "1/8", "1/16", "1/32", "1/64" };
+    static const char* tupletMark[] = { "", "t", "/5", "/6", "/7" };
+    juce::String third = "T " + signedString (proc.getEchoOffsetPercent (echo), 1) + "%";
+    if (proc.getTempoMode() != 0)
+        third = juce::String (shortNote[proc.getEchoRhythm (echo)])
+                + tupletMark[proc.getEchoTuplet (echo)]
+                + " x" + juce::String (proc.getEchoRhythmCount (echo));
     const juce::String lines[] = { "L " + lvl,
                                    "P " + signedString (semis, wholeSemis ? 0 : 2),
-                                   "T " + signedString (proc.getEchoOffsetPercent (echo), 1) + "%" };
+                                   third };
     for (const auto& line : lines)
         g.drawFittedText (line, text.removeFromTop (lineH).toNearestInt(), juce::Justification::centredLeft, 1, 0.7f);
 }
@@ -274,6 +337,26 @@ EchoPage::EchoPage (ChouchouDelayAudioProcessor& p) : proc (p)
     setupKnob (pitchKnob, pitchName, "Pitch");
     setupKnob (fineKnob, fineName, "Fine");
     setupKnob (offsetKnob, offsetName, "Time Offset");
+    setupKnob (panKnob, panName, "Pan");
+    setupKnob (countKnob, countName, "Count");
+    panKnob.setTooltip ("Pan for this echo. Centre feeds both sides.");
+    countKnob.setTooltip ("How many of the chosen note, from 1 to 64.");
+
+    rhythmName.setText ("Rhythm", juce::dontSendNotification);
+    rhythmName.setJustificationType (juce::Justification::centred);
+    rhythmName.setColour (juce::Label::textColourId, kTextDim);
+    addAndMakeVisible (rhythmName);
+    rhythmBox.addItemList ({ "Half", "Quarter", "8th", "16th", "32nd", "64th" }, 1);
+    rhythmBox.setTooltip ("Note for this echo when tempo is Real-time or Tap. 64th is the shortest.");
+    addAndMakeVisible (rhythmBox);
+
+    tupletName.setText ("Tuplet", juce::dontSendNotification);
+    tupletName.setJustificationType (juce::Justification::centred);
+    tupletName.setColour (juce::Label::textColourId, kTextDim);
+    addAndMakeVisible (tupletName);
+    tupletBox.addItemList ({ "Straight", "Triplet", "Quintuplet", "Sextuplet", "Septuplet" }, 1);
+    tupletBox.setTooltip ("Straight, or a tuplet: triplet (3 in the time of 2), quintuplet, sextuplet or septuplet (in the time of 4).");
+    addAndMakeVisible (tupletBox);
 
     for (auto* l : { &offsetReadout, &infoReadout })
     {
@@ -306,11 +389,16 @@ void EchoPage::showEcho (int echoIndex)
     auto& apvts = proc.getAPVTS();
 
     onAttach.reset(); levelAttach.reset(); pitchAttach.reset(); fineAttach.reset(); offsetAttach.reset();
+    panAttach.reset(); countAttach.reset(); rhythmAttach.reset(); tupletAttach.reset();
     onAttach     = std::make_unique<ButtonAttachment> (apvts, ChouchouDelayAudioProcessor::idOn (echo), onButton);
     levelAttach  = std::make_unique<SliderAttachment> (apvts, ChouchouDelayAudioProcessor::idLevel (echo), levelKnob);
     pitchAttach  = std::make_unique<SliderAttachment> (apvts, ChouchouDelayAudioProcessor::idPitch (echo), pitchKnob);
     fineAttach   = std::make_unique<SliderAttachment> (apvts, ChouchouDelayAudioProcessor::idFine (echo), fineKnob);
     offsetAttach = std::make_unique<SliderAttachment> (apvts, ChouchouDelayAudioProcessor::idOffset (echo), offsetKnob);
+    panAttach    = std::make_unique<SliderAttachment> (apvts, ChouchouDelayAudioProcessor::idPan (echo), panKnob);
+    countAttach  = std::make_unique<SliderAttachment> (apvts, ChouchouDelayAudioProcessor::idRhythmCount (echo), countKnob);
+    rhythmAttach = std::make_unique<ComboAttachment> (apvts, ChouchouDelayAudioProcessor::idRhythm (echo), rhythmBox);
+    tupletAttach = std::make_unique<ComboAttachment> (apvts, ChouchouDelayAudioProcessor::idTuplet (echo), tupletBox);
 
     title.setText ("Echo " + juce::String (echo), juce::dontSendNotification);
     setVisible (true);
@@ -335,14 +423,32 @@ void EchoPage::refresh()
     const double sr = proc.getSampleRateSafe();
     const double interval = proc.getIntervalSeconds();
     const double pct = proc.getEchoOffsetPercent (echo);
-    const double baseSamples = juce::jmax (1.0, (double) std::llround ((double) echo * interval * sr));
+    const bool tempo = proc.getTempoMode() != 0;
+    const double baseSeconds = tempo
+        ? (double) proc.getEchoRhythmCount (echo) * (60.0 / (double) proc.getCurrentBpm())
+              * ChouchouDelayAudioProcessor::rhythmBeats (proc.getEchoRhythm (echo))
+              * ChouchouDelayAudioProcessor::tupletFactor (proc.getEchoTuplet (echo))
+        : (double) echo * interval;
+    const double baseSamples = juce::jmax (1.0, (double) std::llround (baseSeconds * sr));
     const double shiftSamples = proc.getEchoDelaySamples (echo) - baseSamples;
+    const juce::String baseText = tempo
+        ? juce::String (proc.getEchoRhythmCount (echo)) + " x " + ChouchouDelayAudioProcessor::rhythmName (proc.getEchoRhythm (echo))
+              + " " + ChouchouDelayAudioProcessor::tupletName (proc.getEchoTuplet (echo))
+        : formatSeconds (interval);
 
-    offsetReadout.setText (signedString (pct, 1) + "% of " + formatSeconds (interval) + " = "
+    offsetReadout.setText (signedString (pct, 1) + "% of " + baseText + " = "
                                + (shiftSamples > 0 ? "+" : shiftSamples < 0 ? "-" : "")
                                + formatSeconds (std::abs (shiftSamples) / sr) + " / "
                                + signedString (shiftSamples, 0) + " smp",
                            juce::dontSendNotification);
+
+    const float rhythmAlpha = tempo ? 1.0f : 0.35f;
+    rhythmBox.setAlpha (rhythmAlpha);
+    rhythmName.setAlpha (rhythmAlpha);
+    tupletBox.setAlpha (rhythmAlpha);
+    tupletName.setAlpha (rhythmAlpha);
+    countKnob.setAlpha (rhythmAlpha);
+    countName.setAlpha (rhythmAlpha);
 
     const auto pitchCol = pitchColour (proc.getEchoPitchSemitones (echo));
     pitchKnob.setColour (juce::Slider::rotarySliderFillColourId, pitchCol);
@@ -362,8 +468,8 @@ void EchoPage::refresh()
 
 juce::Rectangle<int> EchoPage::panelBounds() const
 {
-    const int w = juce::jmin (760, getWidth() - 40);
-    const int h = juce::jmin (420, getHeight() - 40);
+    const int w = juce::jmin (860, getWidth() - 40);
+    const int h = juce::jmin (520, getHeight() - 40);
     return getLocalBounds().withSizeKeepingCentre (w, h);
 }
 
@@ -397,15 +503,33 @@ void EchoPage::resized()
     offsetReadout.setBounds (r.removeFromBottom (26));
     r.removeFromBottom (8);
 
-    const int knobW = r.getWidth() / 4;
-    juce::Slider* knobs[] = { &levelKnob, &pitchKnob, &fineKnob, &offsetKnob };
-    juce::Label* names[] = { &levelName, &pitchName, &fineName, &offsetName };
+    auto row1 = r.removeFromTop (r.getHeight() / 2);
+    auto row2 = r;
+    const int knobW = row1.getWidth() / 4;
+    juce::Slider* knobs[] = { &levelKnob, &pitchKnob, &fineKnob, &panKnob };
+    juce::Label* names[] = { &levelName, &pitchName, &fineName, &panName };
     for (int i = 0; i < 4; ++i)
     {
-        auto col = r.removeFromLeft (knobW).reduced (10, 0);
-        names[i]->setBounds (col.removeFromTop (22));
+        auto col = row1.removeFromLeft (knobW).reduced (8, 0);
+        names[i]->setBounds (col.removeFromTop (20));
         knobs[i]->setBounds (col);
     }
+
+    auto offsetCol = row2.removeFromLeft (knobW).reduced (8, 0);
+    offsetName.setBounds (offsetCol.removeFromTop (20));
+    offsetKnob.setBounds (offsetCol);
+
+    auto countCol = row2.removeFromRight (knobW).reduced (8, 0);
+    countName.setBounds (countCol.removeFromTop (20));
+    countKnob.setBounds (countCol);
+
+    auto tupletCol = row2.removeFromRight (knobW).reduced (8, 0);
+    tupletName.setBounds (tupletCol.removeFromTop (20));
+    tupletBox.setBounds (tupletCol.removeFromTop (28).reduced (6, 0));
+
+    auto rhythmCol = row2.reduced (8, 0);
+    rhythmName.setBounds (rhythmCol.removeFromTop (20));
+    rhythmBox.setBounds (rhythmCol.removeFromTop (28).reduced (6, 0));
 }
 
 void EchoPage::mouseDown (const juce::MouseEvent& e)
@@ -416,9 +540,19 @@ void EchoPage::mouseDown (const juce::MouseEvent& e)
 
 bool EchoPage::keyPressed (const juce::KeyPress& key)
 {
+    if (dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr)
+        return false;
+
     if (key == juce::KeyPress::escapeKey)
     {
         close();
+        return true;
+    }
+    if (key.getKeyCode() == juce::KeyPress::spaceKey)
+    {
+        proc.tapTempo();
+        if (auto* mode = proc.getAPVTS().getParameter ("tempoMode"))
+            mode->setValueNotifyingHost (mode->convertTo0to1 (2.0f));
         return true;
     }
     return false;
@@ -434,7 +568,7 @@ ChouchouDelayAudioProcessorEditor::ChouchouDelayAudioProcessorEditor (ChouchouDe
     title.setText ("chouchouDelay", juce::dontSendNotification);
     title.setFont (juce::FontOptions (26.0f, juce::Font::bold));
     addAndMakeVisible (title);
-    subtitle.setText ("multi-tap echo  |  per-echo level, time offset, pitch", juce::dontSendNotification);
+    subtitle.setText ("multi-tap  |  pan per echo  |  manual, real-time or tap tempo", juce::dontSendNotification);
     subtitle.setColour (juce::Label::textColourId, kTextDim);
     addAndMakeVisible (subtitle);
 
@@ -448,6 +582,29 @@ ChouchouDelayAudioProcessorEditor::ChouchouDelayAudioProcessorEditor (ChouchouDe
     intervalAttach = std::make_unique<SliderAttachment> (apvts, "interval", intervalKnob);
     decayAttach    = std::make_unique<SliderAttachment> (apvts, "decay", decayKnob);
     mixAttach      = std::make_unique<SliderAttachment> (apvts, "mix", mixKnob);
+
+    tempoModeBox.addItemList ({ "Manual", "Real-time", "Tap" }, 1);
+    tempoModeBox.setTooltip ("Manual: time in seconds. Real-time: tempo is measured from the signal. Tap: set the tempo with the space bar.");
+    addAndMakeVisible (tempoModeBox);
+    tempoModeAttach = std::make_unique<chouchou_delay_ui::ComboAttachment> (apvts, "tempoMode", tempoModeBox);
+
+    tapButton.setTooltip ("Tap the tempo. The space bar does the same and switches to Tap mode.");
+    tapButton.onClick = [this]
+    {
+        proc.tapTempo();
+        if (auto* mode = proc.getAPVTS().getParameter ("tempoMode"))
+            mode->setValueNotifyingHost (mode->convertTo0to1 (2.0f));
+    };
+    addAndMakeVisible (tapButton);
+
+    bpmReadout.setJustificationType (juce::Justification::centredLeft);
+    bpmReadout.setColour (juce::Label::textColourId, kAccent);
+    addAndMakeVisible (bpmReadout);
+    tempoHint.setJustificationType (juce::Justification::centredLeft);
+    tempoHint.setColour (juce::Label::textColourId, kTextDim);
+    tempoHint.setText ("Each echo: its own pan, note (half to 64th), count, and tuplet (triplet, quintuplet, ...).",
+                       juce::dontSendNotification);
+    addAndMakeVisible (tempoHint);
 
     unitButton.setTooltip ("Show interval in milliseconds or samples");
     unitButton.onClick = [this]
@@ -549,9 +706,19 @@ void ChouchouDelayAudioProcessorEditor::openEcho (int echo)
 
 bool ChouchouDelayAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 {
+    if (dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) != nullptr)
+        return false;
+
     if (key == juce::KeyPress::escapeKey && page.isVisible())
     {
         page.close();
+        return true;
+    }
+    if (key.getKeyCode() == juce::KeyPress::spaceKey)
+    {
+        proc.tapTempo();
+        if (auto* mode = proc.getAPVTS().getParameter ("tempoMode"))
+            mode->setValueNotifyingHost (mode->convertTo0to1 (2.0f));
         return true;
     }
     return false;
@@ -561,10 +728,21 @@ void ChouchouDelayAudioProcessorEditor::timerCallback()
 {
     const double sr = proc.getSampleRateSafe();
     const double interval = proc.getIntervalSeconds();
+    const int mode = proc.getTempoMode();
     intervalReadout.setText ("= " + juce::String (juce::jmax ((juce::int64) 1, (juce::int64) std::llround (interval * sr)))
                                  + " smp  |  " + formatSeconds (interval)
                                  + "  @ " + juce::String (sr / 1000.0, 1) + " kHz",
                              juce::dontSendNotification);
+    const float bpmAlpha = mode == 0 ? 0.35f : 1.0f;
+    intervalKnob.setAlpha (mode == 0 ? 1.0f : 0.35f);
+    intervalName.setAlpha (mode == 0 ? 1.0f : 0.35f);
+    unitButton.setAlpha (mode == 0 ? 1.0f : 0.35f);
+    juce::String bpmText ("interval, no tempo");
+    if (mode != 0)
+        bpmText = (mode == 1 ? juce::String ("real-time ") : juce::String ("tap "))
+                  + juce::String (proc.getCurrentBpm(), 1) + " BPM";
+    bpmReadout.setText (bpmText, juce::dontSendNotification);
+    bpmReadout.setAlpha (bpmAlpha);
 
     const int selected = page.isVisible() ? page.getEcho() : -1;
     for (int i = 0; i < ChouchouDelayAudioProcessor::kMaxEchoes; ++i)
@@ -591,9 +769,17 @@ void ChouchouDelayAudioProcessorEditor::resized()
 {
     auto r = getLocalBounds().reduced (20, 14);
 
-    auto header = r.removeFromTop (40);
+    auto header = r.removeFromTop (36);
     title.setBounds (header.removeFromLeft (220));
     subtitle.setBounds (header);
+
+    auto tempo = r.removeFromTop (28);
+    tempoModeBox.setBounds (tempo.removeFromLeft (168).reduced (0, 2));
+    tempo.removeFromLeft (6);
+    tapButton.setBounds (tempo.removeFromLeft (88).reduced (0, 2));
+    tempo.removeFromLeft (8);
+    bpmReadout.setBounds (tempo.removeFromLeft (150));
+    tempoHint.setBounds (tempo);
 
     footer.setBounds (r.removeFromBottom (24));
     r.removeFromBottom (6);

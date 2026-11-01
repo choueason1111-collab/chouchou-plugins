@@ -31,7 +31,7 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     titleLabel.setFont (juce::FontOptions (16.0f).withStyle ("Bold"));
     addAndMakeVisible (titleLabel);
 
-    subtitleLabel.setText ("Les 10 tessitures choisissent les frequences traitees. Gris = ignore. Bleu = expansion, orange = compression.",
+    subtitleLabel.setText ("The 10 ranges choose which frequencies are processed. Grey = ignored. Blue = expansion, orange = compression.",
                            juce::dontSendNotification);
     subtitleLabel.setJustificationType (juce::Justification::centredLeft);
     subtitleLabel.setColour (juce::Label::textColourId, kMuted);
@@ -77,7 +77,7 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     grTitle.setFont (juce::FontOptions (12.0f).withStyle ("Bold"));
     addAndMakeVisible (grTitle);
 
-    inTitle.setText ("Entree", juce::dontSendNotification);
+    inTitle.setText ("Input", juce::dontSendNotification);
     inTitle.setColour (juce::Label::textColourId, kAccent);
     inTitle.setFont (juce::FontOptions (12.0f).withStyle ("Bold"));
     addAndMakeVisible (inTitle);
@@ -92,7 +92,7 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     rowGrLabel.setFont (juce::FontOptions (11.0f).withStyle ("Bold"));
     addAndMakeVisible (rowGrLabel);
 
-    rowMixLabel.setText ("3  Melange", juce::dontSendNotification);
+    rowMixLabel.setText ("3  Mix", juce::dontSendNotification);
     rowMixLabel.setColour (juce::Label::textColourId, kAccent);
     rowMixLabel.setFont (juce::FontOptions (11.0f).withStyle ("Bold"));
     addAndMakeVisible (rowMixLabel);
@@ -116,27 +116,27 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
         b.setColour (juce::ToggleButton::textColourId, c);
         b.setColour (juce::ToggleButton::tickColourId, c);
         b.setColour (juce::ToggleButton::tickDisabledColourId, kMuted);
-        b.setTooltip ("Cette etape ecoute le bus sidechain");
+        b.setTooltip ("This stage listens to the sidechain bus");
         addAndMakeVisible (b);
     };
 
     styleSc (boostScButton, kLow);
     styleSc (compScButton, kHigh);
 
-    setupKnob (lowSlider,         lowLabel,         "Seuil", kLow);
+    setupKnob (lowSlider,         lowLabel,         "Threshold", kLow);
     setupKnob (upSlider,          upLabel,          "Ratio",  kLow);
-    setupKnob (boostAtkSlider,    boostAtkLabel,    "Attaque", kLow);
-    setupKnob (boostRelSlider,    boostRelLabel,    "Relachement",    kLow);
-    setupKnob (boostSpeedSlider,  boostSpeedLabel,  "Vitesse",  kLow);
+    setupKnob (boostAtkSlider,    boostAtkLabel,    "Attack", kLow);
+    setupKnob (boostRelSlider,    boostRelLabel,    "Release",    kLow);
+    setupKnob (boostSpeedSlider,  boostSpeedLabel,  "Speed",  kLow);
 
-    setupKnob (highSlider,        highLabel,        "Seuil",  kHigh);
+    setupKnob (highSlider,        highLabel,        "Threshold",  kHigh);
     setupKnob (downSlider,        downLabel,        "Ratio",   kHigh);
-    setupKnob (grAtkSlider,       grAtkLabel,       "Attaque",  kHigh);
-    setupKnob (grRelSlider,       grRelLabel,       "Relachement",     kHigh);
-    setupKnob (compSpeedSlider,   compSpeedLabel,   "Vitesse",   kHigh);
+    setupKnob (grAtkSlider,       grAtkLabel,       "Attack",  kHigh);
+    setupKnob (grRelSlider,       grRelLabel,       "Release",     kHigh);
+    setupKnob (compSpeedSlider,   compSpeedLabel,   "Speed",   kHigh);
 
-    setupKnob (mixSlider,         mixLabel,         "Melange",          kAccent);
-    setupKnob (makeupSlider,      makeupLabel,      "Gain de sortie",       kAccent);
+    setupKnob (mixSlider,         mixLabel,         "Mix",          kAccent);
+    setupKnob (makeupSlider,      makeupLabel,      "Output",       kAccent);
 
     lowSlider.setTextValueSuffix (" dBFS");
     highSlider.setTextValueSuffix (" dBFS");
@@ -157,7 +157,7 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
         return juce::jlimit (0.0, 1.0, t.getDoubleValue() / 100.0);
     };
 
-    fftLabel.setText ("Taille de fenetre", juce::dontSendNotification);
+    fftLabel.setText ("Window size", juce::dontSendNotification);
     fftLabel.setJustificationType (juce::Justification::centredLeft);
     fftLabel.setColour (juce::Label::textColourId, kMuted);
     fftLabel.setFont (juce::FontOptions (13.0f).withStyle ("Bold"));
@@ -203,7 +203,7 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     compScButton.toFront (false);
 
     static const char* tessLabels[NewProjectAudioProcessor::kTessituras] = {
-        "20-60 Hz", "60-120 Hz", "120-250 Hz", "250-500 Hz", "0,5-1 kHz",
+        "20-60 Hz", "60-120 Hz", "120-250 Hz", "250-500 Hz", "0.5-1 kHz",
         "1-2 kHz", "2-4 kHz", "4-8 kHz", "8-12 kHz", "12-20 kHz"
     };
     for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
@@ -211,7 +211,7 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
         auto& b = tessButtons[(size_t) i];
         b.setButtonText (tessLabels[i]);
         b.setClickingTogglesState (true);
-        b.setTooltip ("Allume ou eteint l'expander et le compresseur sur cette bande.");
+        b.setTooltip ("Turns the expander and the compressor on or off for this band.");
         b.setColour (juce::TextButton::buttonColourId, kDim);
         b.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xfff2d56b));
         b.setColour (juce::TextButton::textColourOffId, kMuted);
@@ -224,7 +224,7 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     viewButton.onClick = [this]
     {
         showSpectrum = ! showSpectrum;
-        viewButton.setButtonText (showSpectrum ? "Onde" : "Spectre");
+        viewButton.setButtonText (showSpectrum ? "Wave" : "Spectrum");
         repaint();
     };
     viewButton.setColour (juce::TextButton::buttonColourId, kDim);
@@ -284,10 +284,10 @@ void NewProjectAudioProcessorEditor::timerCallback()
     audioProcessor.copyWaveform (waveIn, waveOut, waveGr);
     audioProcessor.copySpectrum (specMag, specGr, specBoost, specSr, specFft);
     const auto summary = compressedSummary();
-    const bool active = summary.startsWith ("Expande") || summary.startsWith ("Compresse");
+    const bool active = summary.startsWith ("Expand") || summary.startsWith ("Compress");
     subtitleLabel.setText (active
                                ? summary
-                               : "Les 10 tessitures choisissent les frequences traitees. Gris = ignore. Bleu = expansion, orange = compression.",
+                               : "The 10 ranges choose which frequencies are processed. Grey = ignored. Blue = expansion, orange = compression.",
                            juce::dontSendNotification);
     for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
     {
@@ -320,9 +320,9 @@ void NewProjectAudioProcessorEditor::updateInfoLabel()
     const float hopMs = audioProcessor.getHopMilliseconds();
 
     const int latency = audioProcessor.getReportedLatencySamples();
-    infoLabel.setText ("Frequence " + juce::String (sr, 0) + " Hz    pas "
-                       + juce::String (hop) + " (" + juce::String (hopMs, 1) + " ms)    latence "
-                       + juce::String (latency) + " ech.",
+    infoLabel.setText ("Sample rate " + juce::String (sr, 0) + " Hz    hop "
+                       + juce::String (hop) + " (" + juce::String (hopMs, 1) + " ms)    latency "
+                       + juce::String (latency) + " smp",
                        juce::dontSendNotification);
 }
 
@@ -401,7 +401,7 @@ void NewProjectAudioProcessorEditor::updateMeters()
     const bool scConnected = audioProcessor.isSidechainConnected();
     const float scDb = scConnected ? audioProcessor.getMeterScDb() : -120.0f;
     smoothSc = (scDb > smoothSc) ? scDb : (smoothSc * 0.85f + scDb * 0.15f);
-    scTitle.setText (scConnected ? "Sidechain" : "Sidechain non branche", juce::dontSendNotification);
+    scTitle.setText (scConnected ? "Sidechain" : "Sidechain off", juce::dontSendNotification);
     scMeter.setValueDb (smoothSc, 60.0f);
 
     if (smoothBoost < 0.05f) smoothBoost = 0.0f;
@@ -439,9 +439,9 @@ void NewProjectAudioProcessorEditor::paintWaveform (juce::Graphics& g, juce::Rec
     auto plotArea = area.reduced (10, 16);
     g.setColour (kMuted);
     g.setFont (juce::FontOptions (11.0f));
-    g.drawText ("Entree", area.getX() + 8, area.getY() + 2, 52, 14, juce::Justification::centredLeft);
+    g.drawText ("Input", area.getX() + 8, area.getY() + 2, 52, 14, juce::Justification::centredLeft);
     g.setColour (kAccent);
-    g.drawText ("Sortie", area.getX() + 62, area.getY() + 2, 52, 14, juce::Justification::centredLeft);
+    g.drawText ("Output", area.getX() + 62, area.getY() + 2, 60, 14, juce::Justification::centredLeft);
     g.setColour (kHigh);
     g.drawText ("Compression", area.getX() + 118, area.getY() + 2, 100, 14, juce::Justification::centredLeft);
 
@@ -543,8 +543,8 @@ juce::String NewProjectAudioProcessorEditor::compressedSummary() const
         return text.isEmpty() ? juce::String() : juce::String (title) + text;
     };
 
-    const auto expansion = peaksText (specBoost, "Expande : ", "+");
-    juce::String compression = peaksText (specGr, "Compresse : ", "-");
+    const auto expansion = peaksText (specBoost, "Expand: ", "+");
+    juce::String compression = peaksText (specGr, "Compress: ", "-");
     if (compression.isEmpty())
     {
         static const char* names[] {
@@ -562,10 +562,10 @@ juce::String NewProjectAudioProcessorEditor::compressedSummary() const
             text += juce::String (names[i]) + " -" + juce::String (gr, 1) + " dB";
         }
         if (text.isNotEmpty())
-            compression = "Compresse : " + text;
+            compression = "Compress: " + text;
     }
     if (expansion.isEmpty() && compression.isEmpty())
-        return "Aucune expansion ni compression";
+        return {};
     if (expansion.isNotEmpty() && compression.isNotEmpty())
         return expansion + "    " + compression;
     return expansion.isNotEmpty() ? expansion : compression;

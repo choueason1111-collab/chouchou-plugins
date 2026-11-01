@@ -66,29 +66,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChouchouFFTEQAudioProcessor:
             juce::NormalisableRange<float> (minV, maxV, step), def);
     };
 
-    auto fr = [] (const char* s) { return juce::String (juce::CharPointer_UTF8 (s)); };
-
     p.push_back (flag ("eqOn", "EQ", false));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
-        juce::ParameterID { "eqEngine", 1 }, "Moteur EQ",
+        juce::ParameterID { "eqEngine", 1 }, "EQ engine",
         juce::StringArray { "Original", "IIR", "FIR" }, 0));
     p.push_back (flag ("fftOn", "FFT", false));
     p.push_back (knob ("mix", "Dry/Wet", 0.0f, 1.0f, 1.0f));
     p.push_back (flag ("autoGain", "Auto Gain", false));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
-        juce::ParameterID { "fftSize", 1 }, fr ("Taille de fen\u00eatre"),
+        juce::ParameterID { "fftSize", 1 }, "Window size",
         juce::StringArray { "512", "1024", "2048", "4096" }, 1));
 
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
-        juce::ParameterID { "scMode", 1 }, "Analyse Sidechain",
-        juce::StringArray { fr ("Arr\u00eat"), fr ("Instantan\u00e9"), fr ("Temps r\u00e9el") }, 0));
-    p.push_back (flag ("scCapture", "Capturer", false));
-    p.push_back (flag ("scMatch", "Copier le spectre", false));
-    p.push_back (knob ("scAmount", fr ("Quantit\u00e9"), 0.0f, 1.0f, 0.0f));
-    p.push_back (flag ("scFollow", "Suivi de hauteur", false));
-    p.push_back (flag ("scUseBands", "Bandes Sidechain", false));
+        juce::ParameterID { "scMode", 1 }, "Sidechain analysis",
+        juce::StringArray { "Off", "Snapshot", "Real-time" }, 0));
+    p.push_back (flag ("scCapture", "Capture", false));
+    p.push_back (flag ("scMatch", "Copy spectrum", false));
+    p.push_back (knob ("scAmount", "Amount", 0.0f, 1.0f, 0.0f));
+    p.push_back (flag ("scFollow", "Pitch follow", false));
+    p.push_back (flag ("scUseBands", "Sidechain bands", false));
     p.push_back (std::make_unique<juce::AudioParameterInt> (
-        juce::ParameterID { "scBandN", 1 }, "Nombre de bandes Sidechain", 1, 1000, 12));
+        juce::ParameterID { "scBandN", 1 }, "Sidechain band count", 1, 1000, 12));
 
     p.push_back (knob ("pitch", "pitch", 0.25f, 4.0f, 1.0f));
     p.push_back (knob ("formant", "formant", 0.25f, 4.0f, 1.0f));
@@ -101,73 +99,73 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChouchouFFTEQAudioProcessor:
     p.push_back (knob ("blur", "blur", 0.0f, 32.0f, 0.0f, 0.1f));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "experiment", 1 }, "experiment",
-        juce::StringArray { "0_chaine", "1_shift", "2_split", "3_offset", "4_write" }, 0));
+        juce::StringArray { "0_chain", "1_shift", "2_split", "3_offset", "4_write" }, 0));
     p.push_back (knob ("shift", "shift", 0.01f, 16.0f, 1.0f));
     p.push_back (knob ("shiftreel", "shiftreel", 0.01f, 16.0f, 1.0f));
     p.push_back (knob ("shiftimage", "shiftimage", 0.01f, 16.0f, 1.0f));
-    p.push_back (flag ("freeze", "Geler", false));
+    p.push_back (flag ("freeze", "Freeze", false));
 
     auto choice = [] (const juce::String& id, const juce::String& name, const juce::StringArray& items, int def)
     {
         return std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id, 1 }, name, items, def);
     };
-    p.push_back (flag ("anOn", "Analyse", true));
-    p.push_back (choice ("anFft", fr ("Taille FFT analyse"), juce::StringArray { "1024", "2048", "4096", "8192", "16384", "32768" }, 1));
-    p.push_back (choice ("anWin", fr ("Fen\u00eatre"), juce::StringArray { "Hann", "Hamming", "Blackman", "Kaiser", "Rectangulaire" }, 0));
-    p.push_back (knob ("anOverlap", "Recouvrement", 0.0f, 75.0f, 50.0f, 1.0f));
-    p.push_back (knob ("anAvg", "Moyenne", 0.0f, 0.98f, 0.0f, 0.01f));
-    p.push_back (knob ("anSmooth", "Lissage", 0.0f, 1.0f, 0.0f, 0.01f));
+    p.push_back (flag ("anOn", "Analysis", true));
+    p.push_back (choice ("anFft", "Analysis FFT size", juce::StringArray { "1024", "2048", "4096", "8192", "16384", "32768" }, 1));
+    p.push_back (choice ("anWin", "Window", juce::StringArray { "Hann", "Hamming", "Blackman", "Kaiser", "Rectangular" }, 0));
+    p.push_back (knob ("anOverlap", "Overlap", 0.0f, 75.0f, 50.0f, 1.0f));
+    p.push_back (knob ("anAvg", "Average", 0.0f, 0.98f, 0.0f, 0.01f));
+    p.push_back (knob ("anSmooth", "Smoothing", 0.0f, 1.0f, 0.0f, 0.01f));
     p.push_back (choice ("anPad", "Zero padding", juce::StringArray { "1", "2", "4" }, 0));
-    p.push_back (knob ("anRate", "Rafraichissement", 5.0f, 60.0f, 30.0f, 1.0f));
-    p.push_back (choice ("anMode", "Mode spectre", juce::StringArray { fr ("Temps r\u00e9el"), "Peak hold", "Moyenne", "Gel", "Cascade" }, 0));
-    p.push_back (knob ("anMin", fr ("Fr\u00e9quence min"), 20.0f, 5000.0f, 20.0f, 1.0f));
-    p.push_back (knob ("anMax", fr ("Fr\u00e9quence max"), 1000.0f, 20000.0f, 20000.0f, 1.0f));
-    p.push_back (knob ("anDb", "Plage dB", 20.0f, 120.0f, 80.0f, 1.0f));
-    p.push_back (knob ("anRef", fr ("Niveau r\u00e9f\u00e9rence"), -60.0f, 12.0f, 0.0f, 0.1f));
-    p.push_back (knob ("anAmp", "Plage amplitude", 0.1f, 4.0f, 1.0f, 0.01f));
-    p.push_back (choice ("anFreqScale", fr ("\u00c9chelle fr\u00e9quence"), juce::StringArray { "Log", "Lineaire" }, 0));
-    p.push_back (choice ("anAmpScale", "Echelle amplitude", juce::StringArray { "dB", "Lineaire" }, 0));
-    p.push_back (choice ("anChan", "Canal", juce::StringArray { "Gauche", "Droite", "Mid", "Side", "Gauche+Droite" }, 4));
-    p.push_back (flag ("anSnap", "Calage notes", false));
-    p.push_back (flag ("anNotes", "Nom de note", true));
-    p.push_back (flag ("anMeas", "Mesures", true));
+    p.push_back (knob ("anRate", "Refresh", 5.0f, 60.0f, 30.0f, 1.0f));
+    p.push_back (choice ("anMode", "Spectrum mode", juce::StringArray { "Real-time", "Peak hold", "Average", "Freeze", "Waterfall" }, 0));
+    p.push_back (knob ("anMin", "Min frequency", 20.0f, 5000.0f, 20.0f, 1.0f));
+    p.push_back (knob ("anMax", "Max frequency", 1000.0f, 20000.0f, 20000.0f, 1.0f));
+    p.push_back (knob ("anDb", "dB range", 20.0f, 120.0f, 80.0f, 1.0f));
+    p.push_back (knob ("anRef", "Reference level", -60.0f, 12.0f, 0.0f, 0.1f));
+    p.push_back (knob ("anAmp", "Amplitude range", 0.1f, 4.0f, 1.0f, 0.01f));
+    p.push_back (choice ("anFreqScale", "Frequency scale", juce::StringArray { "Log", "Linear" }, 0));
+    p.push_back (choice ("anAmpScale", "Amplitude scale", juce::StringArray { "dB", "Linear" }, 0));
+    p.push_back (choice ("anChan", "Channel", juce::StringArray { "Left", "Right", "Mid", "Side", "Left+Right" }, 4));
+    p.push_back (flag ("anSnap", "Snap to notes", false));
+    p.push_back (flag ("anNotes", "Note name", true));
+    p.push_back (flag ("anMeas", "Measures", true));
     p.push_back (flag ("anDiff", "Difference", false));
-    p.push_back (flag ("anSc", "Spectre sidechain", true));
+    p.push_back (flag ("anSc", "Sidechain spectrum", true));
     p.push_back (flag ("phOn", "Phase", false));
-    p.push_back (knob ("phGain", "Gain affichage", 0.25f, 8.0f, 1.0f, 0.01f));
-    p.push_back (knob ("phDecay", "Extinction", 0.0f, 1.0f, 0.35f, 0.01f));
-    p.push_back (knob ("phPersist", "Persistance", 40.0f, 2000.0f, 400.0f, 1.0f));
+    p.push_back (knob ("phGain", "Display gain", 0.25f, 8.0f, 1.0f, 0.01f));
+    p.push_back (knob ("phDecay", "Decay", 0.0f, 1.0f, 0.35f, 0.01f));
+    p.push_back (knob ("phPersist", "Persistence", 40.0f, 2000.0f, 400.0f, 1.0f));
     p.push_back (knob ("phRot", "Rotation", -180.0f, 180.0f, 0.0f, 1.0f));
     p.push_back (knob ("phZoom", "Zoom", 0.25f, 8.0f, 1.0f, 0.01f));
-    p.push_back (knob ("phScaleX", "Echelle X", 0.25f, 4.0f, 1.0f, 0.01f));
-    p.push_back (knob ("phScaleY", "Echelle Y", 0.25f, 4.0f, 1.0f, 0.01f));
-    p.push_back (knob ("phThick", "Epaisseur", 1.0f, 4.0f, 1.5f, 0.1f));
-    p.push_back (knob ("phBright", "Luminosite", 0.15f, 1.0f, 0.85f, 0.01f));
-    p.push_back (flag ("phGrid", "Grille", true));
-    p.push_back (flag ("phFreeze", "Figer phase", false));
-    p.push_back (choice ("phMode", "Mode phase", juce::StringArray { "Lissajous", "Correlation", "Mid/Side" }, 0));
-    p.push_back (choice ("phInput", "Entree phase", juce::StringArray { "Gauche/Droite", "Mid/Side" }, 0));
+    p.push_back (knob ("phScaleX", "Scale X", 0.25f, 4.0f, 1.0f, 0.01f));
+    p.push_back (knob ("phScaleY", "Scale Y", 0.25f, 4.0f, 1.0f, 0.01f));
+    p.push_back (knob ("phThick", "Thickness", 1.0f, 4.0f, 1.5f, 0.1f));
+    p.push_back (knob ("phBright", "Brightness", 0.15f, 1.0f, 0.85f, 0.01f));
+    p.push_back (flag ("phGrid", "Grid", true));
+    p.push_back (flag ("phFreeze", "Freeze phase", false));
+    p.push_back (choice ("phMode", "Phase mode", juce::StringArray { "Lissajous", "Correlation", "Mid/Side" }, 0));
+    p.push_back (choice ("phInput", "Phase input", juce::StringArray { "Left/Right", "Mid/Side" }, 0));
 
     p.push_back (std::make_unique<juce::AudioParameterInt> (
-        juce::ParameterID { "bandCount", 1 }, "Bandes", 0, kMaxBands, 0));
+        juce::ParameterID { "bandCount", 1 }, "Bands", 0, kMaxBands, 0));
 
     for (int i = 0; i < kMaxBands; ++i)
     {
         const auto n = juce::String (i + 1);
-        p.push_back (flag (bandId (i, "on"), "Bande " + n, false));
+        p.push_back (flag (bandId (i, "on"), "Band " + n, false));
         p.push_back (std::make_unique<juce::AudioParameterChoice> (
             juce::ParameterID { bandId (i, "type"), 1 }, "Type " + n,
-            juce::StringArray { fr ("Cr\u00eate"), "Shelf bas", "Shelf haut", "Coupe bas", "Coupe haut" }, 0));
+            juce::StringArray { "Peak", "Low shelf", "High shelf", "Low cut", "High cut" }, 0));
         p.push_back (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { bandId (i, "freq"), 1 }, fr ("Fr\u00e9quence ") + n,
+            juce::ParameterID { bandId (i, "freq"), 1 }, "Frequency " + n,
             juce::NormalisableRange<float> (20.0f, 20000.0f, 0.01f, 0.25f), 1000.0f));
         p.push_back (knob (bandId (i, "gain"), "Gain " + n, -24.0f, 24.0f, 0.0f, 0.1f));
         p.push_back (knob (bandId (i, "q"), "Q " + n, 0.1f, 10.0f, 0.707f, 0.001f));
-        p.push_back (knob (bandId (i, "slope"), "Pente " + n, 6.0f, 96.0f, 12.0f, 6.0f));
+        p.push_back (knob (bandId (i, "slope"), "Slope " + n, 6.0f, 96.0f, 12.0f, 6.0f));
         p.push_back (std::make_unique<juce::AudioParameterChoice> (
-            juce::ParameterID { bandId (i, "calc"), 1 }, "Calcul " + n,
+            juce::ParameterID { bandId (i, "calc"), 1 }, "Calc " + n,
             juce::StringArray { "Butterworth", "Q" }, 0));
-        p.push_back (knob (bandId (i, "dly"), fr ("D\u00e9lai ") + n, 0.0f, 20.0f, 0.0f, 0.01f));
+        p.push_back (knob (bandId (i, "dly"), "Delay " + n, 0.0f, 20.0f, 0.0f, 0.01f));
         p.push_back (knob (bandId (i, "pan"), "Pan " + n, -1.0f, 1.0f, 0.0f, 0.01f));
     }
 

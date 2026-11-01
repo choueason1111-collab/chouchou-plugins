@@ -62,8 +62,8 @@ private:
     juce::Slider mix, scAmount, scBandN;
     juce::Label scBandCaption;
     juce::ComboBox scMode, fftSize, eqEngine, experimentBox;
-    juce::TextButton addBand { "Ajouter une bande" };
-    juce::TextButton removeBand { "Supprimer" };
+    juce::TextButton addBand { "Add" };
+    juce::TextButton removeBand { "Remove" };
     juce::Viewport bandViewport;
     juce::Component bandHolder;
 
@@ -98,7 +98,7 @@ private:
     std::vector<float> refCurve, slotA, slotB, corrHistory;
     AnalyserControls analyserUi;
     PhaseControls phaseUi;
-    juce::TextButton pageEq { "EQ" }, pageSpec { "Spectre" }, pagePhase { "Phase" };
+    juce::TextButton pageEq { "EQ" }, pageSpec { "Spectrum" }, pagePhase { "Phase" };
     int viewPage = 0;
     int timerHz = 30;
     DisplayAnalyser::Frame anFrame;

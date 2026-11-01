@@ -127,7 +127,7 @@ private:
     std::vector<float> waveIn, waveOut, waveGr, specMag, specGr, specBoost;
     double specSr = 48000.0;
     int specFft = 2048;
-    juce::TextButton viewButton { "Onde" };
+    juce::TextButton viewButton { "Wave" };
     bool showSpectrum = true;
     bool cursorOn = false;
     juce::Point<float> cursorPos;

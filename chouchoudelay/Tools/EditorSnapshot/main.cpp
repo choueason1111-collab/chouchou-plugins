@@ -95,6 +95,18 @@ int main (int argc, char** argv)
         if (c->isVisible() && ! ed->getLocalBounds().contains (c->getBounds())) allInside = false;
     expect (allInside, "All visible components inside the editor at 1200x760");
 
+    auto combos = findAll<juce::ComboBox> (*ed);
+    bool tempoChoices = false;
+    bool emptyCombo = false;
+    for (auto* box : combos)
+    {
+        if (box->getNumItems() == 0 || box->getText() == "(no choices)") emptyCombo = true;
+        if (box->getNumItems() == 3 && box->getItemText (0) == "Manual" && box->getItemText (2) == "Tap")
+            tempoChoices = true;
+    }
+    expect (tempoChoices, "Tempo menu offers Manual, Real-time and Tap");
+    expect (! emptyCombo, "No combo is empty");
+
     savePng (*ed, outDir.getChildFile ("editor_main.png"));
 
     if (cells.size() == 32 && pages.size() == 1)
@@ -113,6 +125,33 @@ int main (int argc, char** argv)
         for (auto* l : labels)
             if (l->getText().contains ("+1.0% of 300.00 ms = +3.000 ms / +144 smp")) offsetText = true;
         expect (offsetText, "Offset readout shows +1.0% of 300 ms = +3 ms / +144 smp");
+
+        auto pageCombos = findAll<juce::ComboBox> (*page);
+        bool rhythmOk = false;
+        for (auto* box : pageCombos)
+            if (box->getNumItems() == 6 && box->getItemText (0) == "Half" && box->getItemText (5) == "64th")
+                rhythmOk = true;
+        expect (rhythmOk, "Each echo offers half note through 64th");
+
+        bool tupletOk = false;
+        for (auto* box : pageCombos)
+            if (box->getNumItems() == 5 && box->getItemText (1) == "Triplet" && box->getItemText (2) == "Quintuplet")
+                tupletOk = true;
+        expect (tupletOk, "Each echo can choose a triplet, quintuplet, sextuplet or septuplet");
+
+        auto pageSliders = findAll<juce::Slider> (*page);
+        bool sliderOverlap = false;
+        for (size_t i = 0; i < pageSliders.size(); ++i)
+            for (size_t j = i + 1; j < pageSliders.size(); ++j)
+                if (pageSliders[i]->getBounds().intersects (pageSliders[j]->getBounds()))
+                    sliderOverlap = true;
+        expect (pageSliders.size() >= 6 && ! sliderOverlap, "Echo page knobs, including Pan and Nombre, do not overlap");
+
+        bool pageInside = true;
+        for (auto* c : page->getChildren())
+            if (c->isVisible() && ! page->getLocalBounds().contains (c->getBounds()))
+                pageInside = false;
+        expect (pageInside, "Echo page controls stay inside the window");
 
         savePng (*ed, outDir.getChildFile ("editor_echo_page.png"));
 
@@ -134,6 +173,17 @@ int main (int argc, char** argv)
         expect (! page->isVisible(), "Esc closes the page");
 
         savePng (*ed, outDir.getChildFile ("editor_after_close.png"));
+
+        setParam (proc, "tempoMode", 2.0f);
+        setParam (proc, "echoCount", 7.0f);
+        setParam (proc, Proc::idRhythm (1), 1.0f);
+        setParam (proc, Proc::idRhythmCount (1), 1.0f);
+        setParam (proc, Proc::idRhythm (2), 2.0f);
+        setParam (proc, Proc::idRhythmCount (2), 2.0f);
+        setParam (proc, Proc::idRhythm (3), 2.0f);
+        setParam (proc, Proc::idRhythmCount (3), 3.0f);
+        pump (80);
+        savePng (*ed, outDir.getChildFile ("editor_tempo.png"));
     }
 
     ed->setSize (1000, 660);

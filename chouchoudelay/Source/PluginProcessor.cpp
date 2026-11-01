@@ -69,6 +69,7 @@ ChouchouDelayAudioProcessor::ChouchouDelayAudioProcessor()
     pInterval  = apvts.getRawParameterValue ("interval");
     pDecay     = apvts.getRawParameterValue ("decay");
     pMix       = apvts.getRawParameterValue ("mix");
+    pTempoMode = apvts.getRawParameterValue ("tempoMode");
 
     for (int t = 0; t < kMaxEchoes; ++t)
     {
@@ -78,6 +79,10 @@ ChouchouDelayAudioProcessor::ChouchouDelayAudioProcessor()
         pFine[(size_t) t]   = apvts.getRawParameterValue (idFine (e));
         pLevel[(size_t) t]  = apvts.getRawParameterValue (idLevel (e));
         pOffset[(size_t) t] = apvts.getRawParameterValue (idOffset (e));
+        pPan[(size_t) t]    = apvts.getRawParameterValue (idPan (e));
+        pRhythm[(size_t) t] = apvts.getRawParameterValue (idRhythm (e));
+        pRhythmCount[(size_t) t] = apvts.getRawParameterValue (idRhythmCount (e));
+        pTuplet[(size_t) t] = apvts.getRawParameterValue (idTuplet (e));
     }
 
     if (! apvts.state.hasProperty ("intervalUnit"))
@@ -126,6 +131,11 @@ ChouchouDelayAudioProcessor::createLayout (ChouchouDelayAudioProcessor& self)
                                               return (float) juce::jlimit (kMinDecaySeconds, kMaxDecaySeconds, sec);
                                           })));
 
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "tempoMode", 1 }, "Tempo",
+        juce::StringArray { "Manual", "Real-time", "Tap" },
+        0));
+
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "mix", 1 }, "Mix", juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f,
         juce::AudioParameterFloatAttributes()
@@ -173,6 +183,31 @@ ChouchouDelayAudioProcessor::createLayout (ChouchouDelayAudioProcessor& self)
                 .withLabel ("%")
                 .withStringFromValueFunction ([] (float v, int)
                                               { return (v > 0 ? "+" : "") + juce::String (v, 1) + " %"; })));
+
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { idPan (e), 1 }, "Echo " + n + " Pan",
+            juce::NormalisableRange<float> (-1.0f, 1.0f, 0.01f), 0.0f,
+            juce::AudioParameterFloatAttributes()
+                .withStringFromValueFunction ([] (float v, int)
+                                              {
+                                                  if (v < -0.05f) return juce::String ("L ") + juce::String (-v, 2);
+                                                  if (v > 0.05f)  return juce::String ("R ") + juce::String (v, 2);
+                                                  return juce::String ("C");
+                                              })));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { idRhythm (e), 1 }, "Echo " + n + " Rhythm",
+            juce::StringArray { "Half", "Quarter", "8th", "16th", "32nd", "64th" },
+            1));
+
+        layout.add (std::make_unique<juce::AudioParameterInt> (
+            juce::ParameterID { idRhythmCount (e), 1 }, "Echo " + n + " Count",
+            1, 64, juce::jlimit (1, 64, e)));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { idTuplet (e), 1 }, "Echo " + n + " Tuplet",
+            juce::StringArray { "Straight", "Triplet", "Quintuplet", "Sextuplet", "Septuplet" },
+            0));
     }
 
     return layout;
@@ -220,11 +255,98 @@ double ChouchouDelayAudioProcessor::getEchoPitchSemitones (int echo) const
     return (double) pPitch[t]->load() + (double) pFine[t]->load() / 100.0;
 }
 
+juce::String ChouchouDelayAudioProcessor::rhythmName (int index)
+{
+    static const char* names[] = { "Half", "Quarter", "8th", "16th", "32nd", "64th" };
+    return names[juce::jlimit (0, kRhythmCount - 1, index)];
+}
+
+double ChouchouDelayAudioProcessor::rhythmBeats (int index)
+{
+    static const double beats[] = { 2.0, 1.0, 0.5, 0.25, 0.125, 0.0625 };
+    return beats[juce::jlimit (0, kRhythmCount - 1, index)];
+}
+
+juce::String ChouchouDelayAudioProcessor::tupletName (int index)
+{
+    static const char* names[] = { "Straight", "Triplet", "Quintuplet", "Sextuplet", "Septuplet" };
+    return names[juce::jlimit (0, kTupletCount - 1, index)];
+}
+
+double ChouchouDelayAudioProcessor::tupletFactor (int index)
+{
+    // Straight, 3 in the time of 2, then 5, 6 and 7 in the time of 4.
+    static const double factor[] = { 1.0, 2.0 / 3.0, 4.0 / 5.0, 4.0 / 6.0, 4.0 / 7.0 };
+    return factor[juce::jlimit (0, kTupletCount - 1, index)];
+}
+
+int ChouchouDelayAudioProcessor::getTempoMode() const
+{
+    return juce::jlimit (0, 2, (int) std::lround (pTempoMode->load()));
+}
+
+float ChouchouDelayAudioProcessor::getCurrentBpm() const
+{
+    const int mode = getTempoMode();
+    const float bpm = mode == 1 ? detectedBpm.load() : tapBpm.load();
+    return juce::jlimit (30.0f, 300.0f, bpm);
+}
+
+float ChouchouDelayAudioProcessor::getEchoPan (int echo) const
+{
+    return pPan[(size_t) (echo - 1)]->load();
+}
+
+int ChouchouDelayAudioProcessor::getEchoRhythm (int echo) const
+{
+    return juce::jlimit (0, kRhythmCount - 1, (int) std::lround (pRhythm[(size_t) (echo - 1)]->load()));
+}
+
+int ChouchouDelayAudioProcessor::getEchoRhythmCount (int echo) const
+{
+    return juce::jlimit (1, 64, (int) std::lround (pRhythmCount[(size_t) (echo - 1)]->load()));
+}
+
+int ChouchouDelayAudioProcessor::getEchoTuplet (int echo) const
+{
+    return juce::jlimit (0, kTupletCount - 1, (int) std::lround (pTuplet[(size_t) (echo - 1)]->load()));
+}
+
+void ChouchouDelayAudioProcessor::tapTempo() noexcept
+{
+    const auto now = (juce::int64) juce::Time::getMillisecondCounter();
+    const auto prev = lastTapMs.exchange (now);
+    if (prev <= 0 || now - prev > 2000 || now - prev < 50)
+    {
+        tapIntervals = 0;
+        return;
+    }
+
+    tapHist[(size_t) tapHistPos] = (double) (now - prev);
+    tapHistPos = (tapHistPos + 1) % (int) tapHist.size();
+    if (tapIntervals < (int) tapHist.size())
+        ++tapIntervals;
+
+    double sum = 0.0;
+    for (int i = 0; i < tapIntervals; ++i)
+        sum += tapHist[(size_t) i];
+    tapBpm.store (juce::jlimit (30.0f, 300.0f, (float) (60000.0 / (sum / (double) tapIntervals))));
+}
+
 double ChouchouDelayAudioProcessor::getEchoDelaySamples (int echo) const
 {
     const double sr = currentSampleRate.load();
-    const double t = ((double) echo + getEchoOffsetPercent (echo) / 100.0) * getIntervalSeconds();
-    return juce::jmax (1.0, (double) std::llround (t * sr));
+    const double pct = getEchoOffsetPercent (echo) / 100.0;
+    double seconds;
+    if (getTempoMode() == 0)
+        seconds = ((double) echo + pct) * getIntervalSeconds();
+    else
+    {
+        const double beat = 60.0 / (double) getCurrentBpm();
+        const double unit = beat * rhythmBeats (getEchoRhythm (echo)) * tupletFactor (getEchoTuplet (echo));
+        seconds = ((double) getEchoRhythmCount (echo) + pct) * unit;
+    }
+    return juce::jmax (1.0, (double) std::llround (seconds * sr));
 }
 
 double ChouchouDelayAudioProcessor::getEchoTimeSeconds (int echo) const
@@ -416,6 +538,11 @@ void ChouchouDelayAudioProcessor::prepareToPlay (double sampleRate, int)
     mixSmoothed.reset (sr, 0.03);
     mixSmoothed.setCurrentAndTargetValue (pMix->load() / 100.0f);
 
+    envRing.assign (800, 0.0f);
+    envWork.assign (800, 0.0f);
+    envPos = envCount = hopFill = envSince = 0;
+    hopSum = 0.0f;
+
     worker.startThread();
 }
 
@@ -469,6 +596,10 @@ void ChouchouDelayAudioProcessor::updateTapTargets (const DelayStore& store, boo
             targetDelay = juce::jmax (1.0, juce::jmin (targetDelay, maxDelay - wMax * 0.5));
         }
 
+        const float pan = juce::jlimit (-1.0f, 1.0f, pPan[(size_t) t]->load());
+        tp.panL = juce::jmin (1.0f, 1.0f - pan);
+        tp.panR = juce::jmin (1.0f, 1.0f + pan);
+
         tp.ratio = pitched ? ratio : 1.0;
         tp.window = window;
         tp.phaseInc = pitched ? (1.0 - ratio) / window : 0.0;
@@ -500,6 +631,96 @@ void ChouchouDelayAudioProcessor::updateTapTargets (const DelayStore& store, boo
     }
 }
 
+void ChouchouDelayAudioProcessor::analyseTempo (const float* left, const float* right, int numSamples, int numChannels)
+{
+    if (envRing.empty() || left == nullptr || numSamples <= 0)
+        return;
+
+    const int hop = juce::jmax (1, (int) std::lround (currentSampleRate.load() / 200.0));
+    const int len = (int) envRing.size();
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        float s = std::abs (left[i]);
+        if (numChannels > 1 && right != nullptr)
+            s = 0.5f * (s + std::abs (right[i]));
+        hopSum += s;
+        if (++hopFill < hop)
+            continue;
+
+        envRing[(size_t) envPos] = hopSum / (float) hop;
+        envPos = (envPos + 1) % len;
+        if (envCount < len)
+            ++envCount;
+        hopSum = 0.0f;
+        hopFill = 0;
+        if (++envSince >= 50 && envCount > 300)
+        {
+            envSince = 0;
+            estimateBpm();
+        }
+    }
+}
+
+void ChouchouDelayAudioProcessor::estimateBpm()
+{
+    const int n = envCount;
+    const int len = (int) envRing.size();
+    if (n < 300 || (int) envWork.size() < n)
+        return;
+
+    double mean = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const int idx = (envPos - n + i + len * 2) % len;
+        envWork[(size_t) i] = envRing[(size_t) idx];
+        mean += envWork[(size_t) i];
+    }
+    mean /= (double) n;
+
+    float energy = 0.0f;
+    for (int i = 0; i < n; ++i)
+    {
+        envWork[(size_t) i] -= (float) mean;
+        energy += envWork[(size_t) i] * envWork[(size_t) i];
+    }
+    if (energy < 1.0e-6f)
+        return;
+
+    const int lagMin = 50;
+    const int lagMax = juce::jmin (n / 2, 400);
+    float best = 0.0f;
+    int bestLag = 0;
+    for (int lag = lagMin; lag <= lagMax; ++lag)
+    {
+        float c = 0.0f;
+        const int m = n - lag;
+        for (int i = 0; i < m; ++i)
+            c += envWork[(size_t) i] * envWork[(size_t) (i + lag)];
+        if (c > best)
+        {
+            best = c;
+            bestLag = lag;
+        }
+    }
+    if (bestLag < lagMin || best < energy * 0.12f)
+        return;
+
+    if (bestLag / 2 >= lagMin)
+    {
+        float half = 0.0f;
+        const int lag2 = bestLag / 2;
+        for (int i = 0; i < n - lag2; ++i)
+            half += envWork[(size_t) i] * envWork[(size_t) (i + lag2)];
+        if (half > best * 0.72f)
+            bestLag = lag2;
+    }
+
+    const float bpm = 60.0f * 200.0f / (float) bestLag;
+    const float prev = detectedBpm.load();
+    detectedBpm.store (juce::jlimit (30.0f, 300.0f, prev + 0.45f * (bpm - prev)));
+}
+
 void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -519,6 +740,8 @@ void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
     updateTapTargets (*store, false);
     mixSmoothed.setTargetValue (juce::jlimit (0.0f, 1.0f, pMix->load() / 100.0f));
+    if (getTempoMode() == 1)
+        analyseTempo (buffer.getReadPointer (0), chans > 1 ? buffer.getReadPointer (1) : nullptr, numSamples, chans);
 
     float* io[2] = { buffer.getWritePointer (0), chans > 1 ? buffer.getWritePointer (1) : nullptr };
     float* line[2] = { store->ch[0].get(), store->numChannels > 1 ? store->ch[1].get() : store->ch[0].get() };
@@ -554,11 +777,12 @@ void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             if (tp.gain == 0.0f)
                 continue;
 
+            const float panGain[2] = { chans > 1 ? tp.panL : 1.0f, tp.panR };
             if (tp.ratio == 1.0)
             {
                 const double d = juce::jlimit (1.0, maxDelay, tp.delay);
                 for (int c = 0; c < chans; ++c)
-                    wet[c] += tp.gain * readHermite (line[c], len, w, d);
+                    wet[c] += tp.gain * panGain[c] * readHermite (line[c], len, w, d);
             }
             else
             {
@@ -571,7 +795,7 @@ void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                     const float sn = (float) std::sin (juce::MathConstants<double>::pi * ph[k]);
                     const float hg = tp.gain * sn * sn;
                     for (int c = 0; c < chans; ++c)
-                        wet[c] += hg * readHermite (line[c], len, w, d);
+                        wet[c] += hg * panGain[c] * readHermite (line[c], len, w, d);
                 }
 
                 tp.phase += tp.phaseInc;

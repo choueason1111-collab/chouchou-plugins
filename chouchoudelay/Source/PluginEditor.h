@@ -7,6 +7,7 @@ namespace chouchou_delay_ui
 {
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
     class DelayLookAndFeel : public juce::LookAndFeel_V4
     {
@@ -76,12 +77,14 @@ namespace chouchou_delay_ui
         CloseButton closeButton;
         juce::TextButton prevButton { "<" }, nextButton { ">" };
         juce::ToggleButton onButton { "On" };
-        juce::Slider levelKnob, pitchKnob, fineKnob, offsetKnob;
-        juce::Label levelName, pitchName, fineName, offsetName;
+        juce::Slider levelKnob, pitchKnob, fineKnob, offsetKnob, panKnob, countKnob;
+        juce::Label levelName, pitchName, fineName, offsetName, panName, countName, rhythmName, tupletName;
+        juce::ComboBox rhythmBox, tupletBox;
         juce::Label offsetReadout, infoReadout;
 
         std::unique_ptr<ButtonAttachment> onAttach;
-        std::unique_ptr<SliderAttachment> levelAttach, pitchAttach, fineAttach, offsetAttach;
+        std::unique_ptr<SliderAttachment> levelAttach, pitchAttach, fineAttach, offsetAttach, panAttach, countAttach;
+        std::unique_ptr<ComboAttachment> rhythmAttach, tupletAttach;
     };
 }
 
@@ -112,10 +115,14 @@ private:
     juce::Label countName, intervalName, decayName, mixName;
     juce::TextButton unitButton;
     juce::Label intervalReadout;
+    juce::ComboBox tempoModeBox;
+    juce::TextButton tapButton { "Tap" };
+    juce::Label bpmReadout, tempoHint;
     juce::Label gridTitle;
     juce::Label footer;
 
     std::unique_ptr<chouchou_delay_ui::SliderAttachment> countAttach, intervalAttach, decayAttach, mixAttach;
+    std::unique_ptr<chouchou_delay_ui::ComboAttachment> tempoModeAttach;
 
     chouchou_delay_ui::TimelineView timeline;
     std::array<std::unique_ptr<chouchou_delay_ui::EchoCell>, ChouchouDelayAudioProcessor::kMaxEchoes> cells;
