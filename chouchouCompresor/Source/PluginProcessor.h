@@ -96,6 +96,9 @@ public:
 
     static constexpr int kTessituras = 10;
     static constexpr int kWavePoints = 512;
+    /** Spectrum UI always spans this axis (even when SR Nyquist is lower). */
+    static constexpr float kSpectrumMinHz = 1.0f;
+    static constexpr float kSpectrumMaxHz = 96000.0f;
 
     /** Recent input, output, and compression amount in dB (0 = no reduction). */
     void copyWaveform (std::vector<float>& input,
@@ -177,7 +180,10 @@ private:
 
         bool useBoostSc = false;  // Already false when no sidechain is connected
         bool useCompSc = false;
-        bool tessOn[kTessituras] = { true, true, true, true, true, true, true, true, true, true };
+        // Expand and compress tessituras are independent — a band can expand
+        // without compressing, or the reverse.
+        bool tessExpOn[kTessituras]  = { true, true, true, true, true, true, true, true, true, true };
+        bool tessCompOn[kTessituras] = { true, true, true, true, true, true, true, true, true, true };
     };
 
     void applyFftSizeFromParameter (bool forceRebuild);
@@ -225,6 +231,10 @@ private:
     std::atomic<float> meterScDb { -120.0f };
     std::atomic<bool> sidechainConnected { false };
     std::atomic<uint32_t> processCounter { 0 };
+
+    float agCoeff = 0.01f;
+    float inPower = 1.0e-8f;
+    float wetPower = 1.0e-8f;
     std::array<std::atomic<float>, kTessituras> tessMeter;
     std::array<std::atomic<float>, kTessituras> tessBoostMeter;
     std::array<float, kTessituras> tessAccum {};

@@ -291,7 +291,7 @@ void EchoCell::paint (juce::Graphics& g)
 
     g.setFont (juce::FontOptions (11.0f));
     g.setColour (on ? kText.withAlpha (0.85f) : kTextDim);
-    const float lineH = juce::jmin (15.0f, text.getHeight() / 3.0f);
+    const float lineH = juce::jmin (14.0f, text.getHeight() / 4.0f);
     const bool wholeSemis = std::abs (semis - std::round (semis)) < 1.0e-6;
     static const char* shortNote[] = { "1/2", "1/4", "1/8", "1/16", "1/32", "1/64" };
     static const char* tupletMark[] = { "", "t", "/5", "/6", "/7" };
@@ -300,9 +300,15 @@ void EchoCell::paint (juce::Graphics& g)
         third = juce::String (shortNote[proc.getEchoRhythm (echo)])
                 + tupletMark[proc.getEchoTuplet (echo)]
                 + " x" + juce::String (proc.getEchoRhythmCount (echo));
+    juce::String fx;
+    if (proc.isEchoGateOn (echo)) fx += "G";
+    if (proc.isEchoCompOn (echo)) fx += (fx.isEmpty() ? "" : " ") + juce::String ("C");
+    if (proc.isEchoInsertLoaded (echo)) fx += (fx.isEmpty() ? "" : " ") + juce::String ("I");
+    if (fx.isEmpty()) fx = "—";
     const juce::String lines[] = { "L " + lvl,
                                    "P " + signedString (semis, wholeSemis ? 0 : 2),
-                                   third };
+                                   third,
+                                   fx };
     for (const auto& line : lines)
         g.drawFittedText (line, text.removeFromTop (lineH).toNearestInt(), juce::Justification::centredLeft, 1, 0.7f);
 }
@@ -369,6 +375,69 @@ EchoPage::EchoPage (ChouchouDelayAudioProcessor& p) : proc (p)
     infoReadout.setFont (juce::FontOptions (13.0f));
     infoReadout.setColour (juce::Label::textColourId, kTextDim);
 
+    addAndMakeVisible (gateOnButton);
+    addAndMakeVisible (compOnButton);
+    setupKnob (gateAmtKnob, gateAmtName, "Gate Amt");
+    setupKnob (gateThreshKnob, gateThreshName, "Gate Thresh");
+    setupKnob (compThreshKnob, compThreshName, "Comp Thresh");
+    setupKnob (compRatioKnob, compRatioName, "Comp Ratio");
+    addAndMakeVisible (gateAutoButton);
+    addAndMakeVisible (compAutoButton);
+
+    insertLoadButton.onClick = [this]
+    {
+        auto& list = proc.getPluginList();
+        juce::PopupMenu menu;
+        juce::KnownPluginList::addToMenu (menu, list.getTypes(), juce::KnownPluginList::sortAlphabetically);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&insertLoadButton),
+                            [this] (int result)
+                            {
+                                if (result <= 0) return;
+                                const auto types = proc.getPluginList().getTypes();
+                                const int index = juce::KnownPluginList::getIndexChosenByMenu (types, result);
+                                if (juce::isPositiveAndBelow (index, types.size()))
+                                    proc.loadEchoInsertAsync (echo, types.getReference (index));
+                            });
+    };
+    insertClearButton.onClick = [this]
+    {
+        insertWindow.reset();
+        insertEditor.reset();
+        insertKeepAlive.reset();
+        proc.clearEchoInsert (echo);
+        refresh();
+    };
+    insertOpenButton.onClick = [this]
+    {
+        insertKeepAlive = proc.getEchoInsertShared (echo);
+        insertEditor = proc.createEchoInsertEditor (echo);
+        if (insertEditor == nullptr)
+            return;
+        class InsertWindow : public juce::DocumentWindow
+        {
+        public:
+            InsertWindow (const juce::String& name, std::unique_ptr<juce::AudioProcessorEditor> ed)
+                : DocumentWindow (name, kPanel, DocumentWindow::closeButton)
+            {
+                setUsingNativeTitleBar (true);
+                setContentOwned (ed.release(), true);
+                setResizable (true, false);
+                centreWithSize (getWidth(), getHeight());
+                setVisible (true);
+            }
+            void closeButtonPressed() override { setVisible (false); }
+        };
+        insertWindow = std::make_unique<InsertWindow> (proc.getEchoInsertName (echo), std::move (insertEditor));
+    };
+    addAndMakeVisible (insertLoadButton);
+    addAndMakeVisible (insertClearButton);
+    addAndMakeVisible (insertOpenButton);
+    addAndMakeVisible (insertBypassButton);
+    insertNameLabel.setColour (juce::Label::textColourId, kAccent);
+    fxStatusLabel.setColour (juce::Label::textColourId, kTextDim);
+    addAndMakeVisible (insertNameLabel);
+    addAndMakeVisible (fxStatusLabel);
+
     setVisible (false);
 }
 
@@ -390,6 +459,10 @@ void EchoPage::showEcho (int echoIndex)
 
     onAttach.reset(); levelAttach.reset(); pitchAttach.reset(); fineAttach.reset(); offsetAttach.reset();
     panAttach.reset(); countAttach.reset(); rhythmAttach.reset(); tupletAttach.reset();
+    gateOnAttach.reset(); compOnAttach.reset(); insertBypassAttach.reset();
+    gateAutoAttach.reset(); compAutoAttach.reset();
+    gateAmtAttach.reset(); gateThreshAttach.reset(); compThreshAttach.reset(); compRatioAttach.reset();
+
     onAttach     = std::make_unique<ButtonAttachment> (apvts, ChouchouDelayAudioProcessor::idOn (echo), onButton);
     levelAttach  = std::make_unique<SliderAttachment> (apvts, ChouchouDelayAudioProcessor::idLevel (echo), levelKnob);
     pitchAttach  = std::make_unique<SliderAttachment> (apvts, ChouchouDelayAudioProcessor::idPitch (echo), pitchKnob);
@@ -399,6 +472,16 @@ void EchoPage::showEcho (int echoIndex)
     countAttach  = std::make_unique<SliderAttachment> (apvts, ChouchouDelayAudioProcessor::idRhythmCount (echo), countKnob);
     rhythmAttach = std::make_unique<ComboAttachment> (apvts, ChouchouDelayAudioProcessor::idRhythm (echo), rhythmBox);
     tupletAttach = std::make_unique<ComboAttachment> (apvts, ChouchouDelayAudioProcessor::idTuplet (echo), tupletBox);
+
+    gateOnAttach = std::make_unique<ButtonAttachment> (apvts, ChouchouDelayAudioProcessor::idGateOn (echo), gateOnButton);
+    compOnAttach = std::make_unique<ButtonAttachment> (apvts, ChouchouDelayAudioProcessor::idCompOn (echo), compOnButton);
+    insertBypassAttach = std::make_unique<ButtonAttachment> (apvts, ChouchouDelayAudioProcessor::idInsBypass (echo), insertBypassButton);
+    gateAmtAttach = std::make_unique<SliderAttachment> (apvts, "gateAmt", gateAmtKnob);
+    gateThreshAttach = std::make_unique<SliderAttachment> (apvts, "gateThresh", gateThreshKnob);
+    compThreshAttach = std::make_unique<SliderAttachment> (apvts, "compHighThresh", compThreshKnob);
+    compRatioAttach = std::make_unique<SliderAttachment> (apvts, "compDownRatio", compRatioKnob);
+    gateAutoAttach = std::make_unique<ButtonAttachment> (apvts, "gateAutoGain", gateAutoButton);
+    compAutoAttach = std::make_unique<ButtonAttachment> (apvts, "compAutoGain", compAutoButton);
 
     title.setText ("Echo " + juce::String (echo), juce::dontSendNotification);
     setVisible (true);
@@ -464,12 +547,19 @@ void EchoPage::refresh()
     else if (echo > proc.getBufferCapacityEchoes())
         info = "Buffer growing, echo will fade in shortly   |   " + info;
     infoReadout.setText (info, juce::dontSendNotification);
+
+    const auto insName = proc.getEchoInsertName (echo);
+    insertNameLabel.setText (insName.isNotEmpty() ? ("Insert: " + insName) : "Insert: (empty)",
+                             juce::dontSendNotification);
+    fxStatusLabel.setText (proc.getUiStatus(), juce::dontSendNotification);
+    insertOpenButton.setEnabled (proc.isEchoInsertLoaded (echo));
+    insertClearButton.setEnabled (proc.isEchoInsertLoaded (echo));
 }
 
 juce::Rectangle<int> EchoPage::panelBounds() const
 {
-    const int w = juce::jmin (860, getWidth() - 40);
-    const int h = juce::jmin (520, getHeight() - 40);
+    const int w = juce::jmin (980, getWidth() - 40);
+    const int h = juce::jmin (700, getHeight() - 40);
     return getLocalBounds().withSizeKeepingCentre (w, h);
 }
 
@@ -497,12 +587,47 @@ void EchoPage::resized()
     onButton.setBounds (header.removeFromRight (80));
     title.setBounds (header);
 
-    r.removeFromTop (10);
-    infoReadout.setBounds (r.removeFromBottom (24));
-    r.removeFromBottom (4);
-    offsetReadout.setBounds (r.removeFromBottom (26));
-    r.removeFromBottom (8);
+    r.removeFromTop (8);
+    fxStatusLabel.setBounds (r.removeFromBottom (18));
+    infoReadout.setBounds (r.removeFromBottom (22));
+    r.removeFromBottom (2);
+    offsetReadout.setBounds (r.removeFromBottom (24));
+    r.removeFromBottom (6);
 
+    auto fxRow = r.removeFromBottom (150);
+    auto insertRow = fxRow.removeFromBottom (40);
+    insertLoadButton.setBounds (insertRow.removeFromLeft (90).reduced (2));
+    insertClearButton.setBounds (insertRow.removeFromLeft (70).reduced (2));
+    insertOpenButton.setBounds (insertRow.removeFromLeft (80).reduced (2));
+    insertBypassButton.setBounds (insertRow.removeFromLeft (100).reduced (2));
+    insertNameLabel.setBounds (insertRow.reduced (6, 0));
+
+    auto gateCol = fxRow.removeFromLeft (fxRow.getWidth() / 2).reduced (4, 0);
+    auto compCol = fxRow.reduced (4, 0);
+    {
+        auto toggles = gateCol.removeFromTop (24);
+        gateOnButton.setBounds (toggles.removeFromLeft (70));
+        gateAutoButton.setBounds (toggles.removeFromLeft (90).reduced (4, 0));
+        const int kw = gateCol.getWidth() / 2;
+        auto a = gateCol.removeFromLeft (kw).reduced (4, 0);
+        gateAmtName.setBounds (a.removeFromTop (16));
+        gateAmtKnob.setBounds (a);
+        gateThreshName.setBounds (gateCol.removeFromTop (16));
+        gateThreshKnob.setBounds (gateCol);
+    }
+    {
+        auto toggles = compCol.removeFromTop (24);
+        compOnButton.setBounds (toggles.removeFromLeft (70));
+        compAutoButton.setBounds (toggles.removeFromLeft (90).reduced (4, 0));
+        const int kw = compCol.getWidth() / 2;
+        auto a = compCol.removeFromLeft (kw).reduced (4, 0);
+        compThreshName.setBounds (a.removeFromTop (16));
+        compThreshKnob.setBounds (a);
+        compRatioName.setBounds (compCol.removeFromTop (16));
+        compRatioKnob.setBounds (compCol);
+    }
+
+    r.removeFromBottom (8);
     auto row1 = r.removeFromTop (r.getHeight() / 2);
     auto row2 = r;
     const int knobW = row1.getWidth() / 4;
@@ -548,13 +673,6 @@ bool EchoPage::keyPressed (const juce::KeyPress& key)
         close();
         return true;
     }
-    if (key.getKeyCode() == juce::KeyPress::spaceKey)
-    {
-        proc.tapTempo();
-        if (auto* mode = proc.getAPVTS().getParameter ("tempoMode"))
-            mode->setValueNotifyingHost (mode->convertTo0to1 (2.0f));
-        return true;
-    }
     return false;
 }
 
@@ -584,11 +702,16 @@ ChouchouDelayAudioProcessorEditor::ChouchouDelayAudioProcessorEditor (ChouchouDe
     mixAttach      = std::make_unique<SliderAttachment> (apvts, "mix", mixKnob);
 
     tempoModeBox.addItemList ({ "Manual", "Real-time", "Tap" }, 1);
-    tempoModeBox.setTooltip ("Manual: time in seconds. Real-time: tempo is measured from the signal. Tap: set the tempo with the space bar.");
+    tempoModeBox.setTooltip ("Manual: time in seconds. Real-time: tempo is measured from the signal. Tap: click the Tap button with the mouse.");
     addAndMakeVisible (tempoModeBox);
     tempoModeAttach = std::make_unique<chouchou_delay_ui::ComboAttachment> (apvts, "tempoMode", tempoModeBox);
 
-    tapButton.setTooltip ("Tap the tempo. The space bar does the same and switches to Tap mode.");
+    tapButton.setButtonText ("Tap");
+    tapButton.setTooltip ("Click repeatedly with the mouse to set the tempo. Switches to Tap mode.");
+    tapButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2a3338));
+    tapButton.setColour (juce::TextButton::buttonOnColourId, kAccent);
+    tapButton.setColour (juce::TextButton::textColourOffId, kText);
+    tapButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1f22));
     tapButton.onClick = [this]
     {
         proc.tapTempo();
@@ -602,7 +725,7 @@ ChouchouDelayAudioProcessorEditor::ChouchouDelayAudioProcessorEditor (ChouchouDe
     addAndMakeVisible (bpmReadout);
     tempoHint.setJustificationType (juce::Justification::centredLeft);
     tempoHint.setColour (juce::Label::textColourId, kTextDim);
-    tempoHint.setText ("Each echo: its own pan, note (half to 64th), count, and tuplet (triplet, quintuplet, ...).",
+    tempoHint.setText ("Click Tap with the mouse for tempo. Each echo: pan, note, count, tuplet.",
                        juce::dontSendNotification);
     addAndMakeVisible (tempoHint);
 
@@ -714,13 +837,6 @@ bool ChouchouDelayAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
         page.close();
         return true;
     }
-    if (key.getKeyCode() == juce::KeyPress::spaceKey)
-    {
-        proc.tapTempo();
-        if (auto* mode = proc.getAPVTS().getParameter ("tempoMode"))
-            mode->setValueNotifyingHost (mode->convertTo0to1 (2.0f));
-        return true;
-    }
     return false;
 }
 
@@ -776,7 +892,7 @@ void ChouchouDelayAudioProcessorEditor::resized()
     auto tempo = r.removeFromTop (28);
     tempoModeBox.setBounds (tempo.removeFromLeft (168).reduced (0, 2));
     tempo.removeFromLeft (6);
-    tapButton.setBounds (tempo.removeFromLeft (88).reduced (0, 2));
+    tapButton.setBounds (tempo.removeFromLeft (110).reduced (0, 1));
     tempo.removeFromLeft (8);
     bpmReadout.setBounds (tempo.removeFromLeft (150));
     tempoHint.setBounds (tempo);

@@ -99,11 +99,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChouchouFFTEQAudioProcessor:
     p.push_back (knob ("blur", "blur", 0.0f, 32.0f, 0.0f, 0.1f));
     p.push_back (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "experiment", 1 }, "experiment",
-        juce::StringArray { "0_chain", "1_shift", "2_split", "3_offset", "4_write" }, 0));
+        juce::StringArray { "0_chain", "1_shift", "2_split", "3_offset", "4_write", "5_ultra" }, 0));
     p.push_back (knob ("shift", "shift", 0.01f, 16.0f, 1.0f));
     p.push_back (knob ("shiftreel", "shiftreel", 0.01f, 16.0f, 1.0f));
     p.push_back (knob ("shiftimage", "shiftimage", 0.01f, 16.0f, 1.0f));
     p.push_back (flag ("freeze", "Freeze", false));
+
+    p.push_back (flag ("usOn", "Ultrasound", false));
+    p.push_back (knob ("usFloor", "Ultrasound floor", 1000.0f, kAbsMaxHz, 18000.0f, 1.0f));
+    p.push_back (knob ("usGain", "Ultrasound gain", -24.0f, 24.0f, 0.0f, 0.1f));
+    p.push_back (knob ("usTilt", "Ultrasound tilt", -1.0f, 1.0f, 0.0f));
+    p.push_back (knob ("usGate", "Ultrasound gate", 0.0f, 1.0f, 0.0f));
+    p.push_back (flag ("usSolo", "Ultrasound solo", false));
 
     auto choice = [] (const juce::String& id, const juce::String& name, const juce::StringArray& items, int def)
     {
@@ -118,8 +125,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChouchouFFTEQAudioProcessor:
     p.push_back (choice ("anPad", "Zero padding", juce::StringArray { "1", "2", "4" }, 0));
     p.push_back (knob ("anRate", "Refresh", 5.0f, 60.0f, 30.0f, 1.0f));
     p.push_back (choice ("anMode", "Spectrum mode", juce::StringArray { "Real-time", "Peak hold", "Average", "Freeze", "Waterfall" }, 0));
-    p.push_back (knob ("anMin", "Min frequency", 20.0f, 5000.0f, 20.0f, 1.0f));
-    p.push_back (knob ("anMax", "Max frequency", 1000.0f, 20000.0f, 20000.0f, 1.0f));
+    p.push_back (knob ("anMin", "Min frequency", 1.0f, 60000.0f, 20.0f, 1.0f));
+    p.push_back (knob ("anMax", "Max frequency", 100.0f, kAbsMaxHz, 20000.0f, 1.0f));
     p.push_back (knob ("anDb", "dB range", 20.0f, 120.0f, 80.0f, 1.0f));
     p.push_back (knob ("anRef", "Reference level", -60.0f, 12.0f, 0.0f, 0.1f));
     p.push_back (knob ("anAmp", "Amplitude range", 0.1f, 4.0f, 1.0f, 0.01f));
@@ -158,7 +165,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChouchouFFTEQAudioProcessor:
             juce::StringArray { "Peak", "Low shelf", "High shelf", "Low cut", "High cut" }, 0));
         p.push_back (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { bandId (i, "freq"), 1 }, "Frequency " + n,
-            juce::NormalisableRange<float> (20.0f, 20000.0f, 0.01f, 0.25f), 1000.0f));
+            juce::NormalisableRange<float> (1.0f, kAbsMaxHz, 0.01f, 0.25f), 1000.0f));
         p.push_back (knob (bandId (i, "gain"), "Gain " + n, -24.0f, 24.0f, 0.0f, 0.1f));
         p.push_back (knob (bandId (i, "q"), "Q " + n, 0.1f, 10.0f, 0.707f, 0.001f));
         p.push_back (knob (bandId (i, "slope"), "Slope " + n, 6.0f, 96.0f, 12.0f, 6.0f));
@@ -270,6 +277,13 @@ void ChouchouFFTEQAudioProcessor::applyFftSize (int choice, bool force)
     std::fill (reference.begin(), reference.end(), 0.0f);
     referenceValid = false;
     lastCapture = false;
+    clearSidechainMatch();
+    for (auto& bank : scFilt)
+        for (auto& f : bank)
+        {
+            f.setUnity();
+            f.reset();
+        }
     inPower = wetPower = 1.0e-8f;
     dryDelayLength = fftSize;
     setLatencySamples (fftSize);
@@ -429,6 +443,181 @@ void ChouchouFFTEQAudioProcessor::processAnalysis (Analyser& a, std::vector<floa
     }
 }
 
+bool ChouchouFFTEQAudioProcessor::sidechainMatchArmed() const noexcept
+{
+    return apvts.getRawParameterValue ("scMatch")->load() > 0.5f
+           && apvts.getRawParameterValue ("scAmount")->load() > 0.0001f
+           && (int) apvts.getRawParameterValue ("scMode")->load() > 0
+           && referenceValid;
+}
+
+void ChouchouFFTEQAudioProcessor::clearSidechainMatch() noexcept
+{
+    matchPeakHz.store (0.0f, std::memory_order_relaxed);
+    std::fill_n (matchDb.begin(), (size_t) nBins, 0.0f);
+    if (scFiltCount > 0)
+    {
+        for (auto& bank : scFilt)
+            for (int b = 0; b < scFiltCount; ++b)
+            {
+                bank[(size_t) b].setUnity();
+                bank[(size_t) b].reset();
+            }
+    }
+    matchBandCount = 0;
+    scFiltCount = 0;
+}
+
+void ChouchouFFTEQAudioProcessor::dropSidechainBands() noexcept
+{
+    if (scFiltCount <= 0)
+        return;
+    for (auto& bank : scFilt)
+        for (int b = 0; b < scFiltCount; ++b)
+        {
+            bank[(size_t) b].setUnity();
+            bank[(size_t) b].reset();
+        }
+    scFiltCount = 0;
+}
+
+void ChouchouFFTEQAudioProcessor::computeMatchTarget (const std::vector<float>& mainMag)
+{
+    const int bins = nBins;
+    const float amount = apvts.getRawParameterValue ("scAmount")->load();
+    octaveSmooth (mainMag, envA, bins);
+    octaveSmooth (reference, envB, bins);
+
+    float scale = 1.0f;
+    if (apvts.getRawParameterValue ("scFollow")->load() > 0.5f)
+    {
+        const float pMain = juce::jmax (1.0f, pitchHzFromMag (mainMag, bins, currentSampleRate, fftSize));
+        const float pRef = juce::jmax (1.0f, pitchHzFromMag (reference, bins, currentSampleRate, fftSize));
+        scale = pRef / pMain;
+    }
+
+    int peak = 1;
+    float peakTemplate = 0.0f;
+    for (int i = 0; i < bins; ++i)
+    {
+        const float src = (float) i * scale;
+        const float scE = lerpMag (envB, src, bins);
+        const float mE = juce::jmax (envA[(size_t) i], 1.0e-8f);
+        const float ratio = juce::jlimit (0.05f, 20.0f, scE / mE);
+        matchTarget[(size_t) i] = 1.0f + amount * (ratio - 1.0f);
+        if (i > 0 && scE > peakTemplate)
+        {
+            peakTemplate = scE;
+            peak = i;
+        }
+    }
+
+    matchPeakHz.store ((float) ((double) peak * currentSampleRate / (double) fftSize),
+                       std::memory_order_relaxed);
+}
+
+void ChouchouFFTEQAudioProcessor::designSidechainBands()
+{
+    const int bins = nBins;
+    const int bandN = juce::jlimit (1, 1000, (int) std::lround (apvts.getRawParameterValue ("scBandN")->load()));
+    const float nyquist = (float) currentSampleRate * 0.5f;
+    const float fLo = 30.0f;
+    const float fHi = juce::jmax (fLo + 1.0f, juce::jmin (nyquist * 0.9f, 18000.0f));
+    const float logSpan = std::log (fHi / fLo);
+    const int n = bandN;
+    const float octaves = std::log2 (fHi / fLo);
+    const float bw = juce::jmax (0.04f, octaves / (float) juce::jmax (1, n));
+    const float q = juce::jlimit (0.25f, 12.0f, 1.0f / (2.0f * std::sinh (0.5f * std::log (2.0f) * bw)));
+    const int previousCount = scFiltCount;
+
+    std::fill_n (matchDb.begin(), (size_t) bins, 0.0f);
+    for (int b = 0; b < n; ++b)
+    {
+        const float t = n == 1 ? 0.5f : (float) b / (float) (n - 1);
+        const float hz = juce::jlimit (20.0f, nyquist * 0.95f, fLo * std::exp (logSpan * t));
+        const float bin = hz * (float) fftSize / (float) currentSampleRate;
+        const float g = juce::jmax (lerpMag (matchTarget, bin, bins), 1.0e-8f);
+        scBandGain[(size_t) b] = 20.0f * std::log10 (g);
+        scNodes[(size_t) b] = { hz, 0.0f, q };
+    }
+
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        for (int b = 0; b < n; ++b)
+        {
+            const float hz = scNodes[(size_t) b].hz;
+            float sum = 0.0f;
+            const int p0 = juce::jmax (0, b - 8);
+            const int p1 = juce::jmin (n - 1, b + 8);
+            for (int p = p0; p <= p1; ++p)
+                if (p != b)
+                    sum += scFilt[0][(size_t) p].responseDb (hz, currentSampleRate);
+            const float db = juce::jlimit (-24.0f, 24.0f, scBandGain[(size_t) b] - sum);
+            scNodes[(size_t) b].db = db;
+            const auto designed = chouchoueq::Biquad::peak (currentSampleRate, hz, q, db);
+            for (auto& bank : scFilt)
+            {
+                if (b >= previousCount)
+                    bank[(size_t) b].reset();
+                bank[(size_t) b].copyCoeffs (designed);
+            }
+        }
+    }
+
+    for (int b = n; b < previousCount; ++b)
+        for (auto& bank : scFilt)
+        {
+            bank[(size_t) b].setUnity();
+            bank[(size_t) b].reset();
+        }
+
+    for (int b = 0; b < n; ++b)
+    {
+        const int shown = juce::jlimit (0, bins - 1,
+                                        (int) std::lround ((double) scNodes[(size_t) b].hz * (double) fftSize / currentSampleRate));
+        matchDb[(size_t) shown] = scNodes[(size_t) b].db;
+    }
+
+    scFiltCount = n;
+    matchBandCount = n;
+}
+
+void ChouchouFFTEQAudioProcessor::applyUltrasound (Chan& c, int bins) noexcept
+{
+    if (apvts.getRawParameterValue ("usOn")->load() < 0.5f || bins < 2 || currentSampleRate <= 0.0)
+        return;
+
+    const float nyquist = (float) (currentSampleRate * 0.5);
+    const float floorHz = juce::jlimit (20.0f, juce::jmin (kAbsMaxHz, nyquist * 0.98f),
+                                        apvts.getRawParameterValue ("usFloor")->load());
+    const int floorBin = juce::jlimit (1, bins - 1,
+                                       (int) std::lround ((double) floorHz / (double) nyquist * (double) (bins - 1)));
+    const float gainLin = juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("usGain")->load());
+    const float tilt = apvts.getRawParameterValue ("usTilt")->load();
+    const float gate = apvts.getRawParameterValue ("usGate")->load();
+    const bool solo = apvts.getRawParameterValue ("usSolo")->load() > 0.5f;
+
+    if (solo)
+        for (int i = 0; i < floorBin; ++i)
+            c.mag[(size_t) i] = 0.0f;
+
+    float peak = 0.0f;
+    for (int i = floorBin; i < bins; ++i)
+        peak = juce::jmax (peak, c.mag[(size_t) i]);
+    const float thr = gate * peak;
+    const float span = juce::jmax (1, bins - 1 - floorBin);
+
+    for (int i = floorBin; i < bins; ++i)
+    {
+        float m = c.mag[(size_t) i];
+        if (gate > 0.0001f && m < thr)
+            m = 0.0f;
+        const float t = (float) (i - floorBin) / (float) span;
+        const float tiltG = std::abs (tilt) > 0.0001f ? std::exp (tilt * (t - 0.5f) * 4.0f) : 1.0f;
+        c.mag[(size_t) i] = m * gainLin * tiltG;
+    }
+}
+
 void ChouchouFFTEQAudioProcessor::processEffectFrame (Chan& c, const float* scMag)
 {
     const int size = fftSize;
@@ -463,118 +652,30 @@ void ChouchouFFTEQAudioProcessor::processEffectFrame (Chan& c, const float* scMa
     else
         c.hasFreeze = false;
 
-    const float amount = apvts.getRawParameterValue ("scAmount")->load();
-    const bool match = apvts.getRawParameterValue ("scMatch")->load() > 0.5f
-                       && amount > 0.0001f
-                       && referenceValid
-                       && scMag != nullptr;
+    // Spectral copy (no "Bands") reshapes this FFT frame. Real bell filters are
+    // designed on the analysis hop and applied in processBlock, so they no longer
+    // force the STFT path or stick after Copy spectrum is turned off.
+    juce::ignoreUnused (scMag);
+    const bool useBands = apvts.getRawParameterValue ("scUseBands")->load() > 0.5f;
+    const bool match = sidechainMatchArmed() && ! useBands;
     if (match)
     {
-        octaveSmooth (c.mag, envA, bins);
-        octaveSmooth (reference, envB, bins);
-        const bool follow = apvts.getRawParameterValue ("scFollow")->load() > 0.5f;
-        float scale = 1.0f;
-        if (follow)
-        {
-            const float pMain = juce::jmax (1.0f, pitchHzFromMag (c.mag, bins, currentSampleRate, fftSize));
-            const float pRef = juce::jmax (1.0f, pitchHzFromMag (reference, bins, currentSampleRate, fftSize));
-            scale = pRef / pMain;
-        }
+        if (&c == &channels[0])
+            computeMatchTarget (c.mag);
 
-        int peak = 1;
-        float peakTemplate = 0.0f;
         for (int i = 0; i < bins; ++i)
         {
-            const float src = (float) i * scale;
-            const float scE = lerpMag (envB, src, bins);
-            const float mE = juce::jmax (envA[(size_t) i], 1.0e-8f);
-            const float ratio = juce::jlimit (0.05f, 20.0f, scE / mE);
-            matchTarget[(size_t) i] = 1.0f + amount * (ratio - 1.0f);
-            if (i > 0 && scE > peakTemplate)
-            {
-                peakTemplate = scE;
-                peak = i;
-            }
-        }
-
-        const bool useBands = apvts.getRawParameterValue ("scUseBands")->load() > 0.5f;
-        const int bandN = juce::jlimit (1, 1000, (int) std::lround (apvts.getRawParameterValue ("scBandN")->load()));
-        if (useBands)
-        {
+            const float g = matchTarget[(size_t) i];
+            c.mag[(size_t) i] *= g;
             if (&c == &channels[0])
-            {
-                const float nyquist = (float) currentSampleRate * 0.5f;
-                const float fLo = 30.0f;
-                const float fHi = juce::jmax (fLo + 1.0f, juce::jmin (nyquist * 0.9f, 18000.0f));
-                const float logSpan = std::log (fHi / fLo);
-                const int n = bandN;
-                const float octaves = std::log2 (fHi / fLo);
-                const float bw = juce::jmax (0.04f, octaves / (float) juce::jmax (1, n));
-                const float q = juce::jlimit (0.25f, 12.0f, 1.0f / (2.0f * std::sinh (0.5f * std::log (2.0f) * bw)));
-                std::fill_n (matchDb.begin(), (size_t) bins, 0.0f);
-                for (int b = 0; b < n; ++b)
-                {
-                    const float t = n == 1 ? 0.5f : (float) b / (float) (n - 1);
-                    const float hz = juce::jlimit (20.0f, nyquist * 0.95f, fLo * std::exp (logSpan * t));
-                    const float bin = hz * (float) fftSize / (float) currentSampleRate;
-                    const float g = juce::jmax (lerpMag (matchTarget, bin, bins), 1.0e-8f);
-                    scBandGain[(size_t) b] = 20.0f * std::log10 (g);
-                    scNodes[(size_t) b] = { hz, 0.0f, q };
-                }
-                for (int pass = 0; pass < 2; ++pass)
-                {
-                    for (int b = 0; b < n; ++b)
-                    {
-                        const float hz = scNodes[(size_t) b].hz;
-                        float sum = 0.0f;
-                        const int p0 = juce::jmax (0, b - 8);
-                        const int p1 = juce::jmin (n - 1, b + 8);
-                        for (int p = p0; p <= p1; ++p)
-                            if (p != b)
-                                sum += scFilt[0][(size_t) p].responseDb (hz, currentSampleRate);
-                        const float db = juce::jlimit (-24.0f, 24.0f, scBandGain[(size_t) b] - sum);
-                        scNodes[(size_t) b].db = db;
-                        const auto designed = chouchoueq::Biquad::peak (currentSampleRate, hz, q, db);
-                        for (auto& bank : scFilt)
-                            bank[(size_t) b].copyCoeffs (designed);
-                    }
-                }
-                for (int b = 0; b < n; ++b)
-                {
-                    const int shown = juce::jlimit (0, bins - 1,
-                                                    (int) std::lround ((double) scNodes[(size_t) b].hz * (double) fftSize / currentSampleRate));
-                    matchDb[(size_t) shown] = scNodes[(size_t) b].db;
-                }
-                scFiltCount = n;
-                matchBandCount = n;
-            }
-        }
-        else
-        {
-            for (int i = 0; i < bins; ++i)
-            {
-                const float g = matchTarget[(size_t) i];
-                c.mag[(size_t) i] *= g;
-                if (&c == &channels[0])
-                    matchDb[(size_t) i] = 20.0f * std::log10 (juce::jmax (g, 1.0e-8f));
-            }
-            if (&c == &channels[0])
-            {
-                matchBandCount = 0;
-                scFiltCount = 0;
-            }
+                matchDb[(size_t) i] = 20.0f * std::log10 (juce::jmax (g, 1.0e-8f));
         }
 
         if (&c == &channels[0])
-            matchPeakHz.store ((float) ((double) peak * currentSampleRate / (double) fftSize),
-                               std::memory_order_relaxed);
-    }
-    else if (&c == &channels[0])
-    {
-        matchPeakHz.store (0.0f, std::memory_order_relaxed);
-        std::fill_n (matchDb.begin(), (size_t) bins, 0.0f);
-        matchBandCount = 0;
-        scFiltCount = 0;
+        {
+            matchBandCount = 0;
+            scFiltCount = 0;
+        }
     }
 
     const float pitch = fftOn ? apvts.getRawParameterValue ("pitch")->load() : 1.0f;
@@ -659,6 +760,24 @@ void ChouchouFFTEQAudioProcessor::processEffectFrame (Chan& c, const float* scMa
             const float im = tmpPhase[(size_t) idx];
             c.mag[(size_t) idx] = std::sqrt (re * re + im * im);
             c.phase[(size_t) idx] = std::atan2 (im, re);
+        }
+    }
+    else if (experiment == 5)
+    {
+        const float floorHz = juce::jlimit (20.0f, kAbsMaxHz, apvts.getRawParameterValue ("usFloor")->load());
+        const float nyquist = (float) juce::jmax (1.0, currentSampleRate * 0.5);
+        const float floorBin = juce::jlimit (1.0f, (float) (bins - 1), floorHz / nyquist * (float) (bins - 1));
+        std::copy_n (c.mag.begin(), (size_t) bins, tmpMag.begin());
+        std::copy_n (c.phase.begin(), (size_t) bins, tmpPhase.begin());
+        for (int idx = 0; idx < bins; ++idx)
+        {
+            if ((float) idx < floorBin)
+                continue;
+            float reel = 0.0f, image = 0.0f;
+            const float src = juce::jlimit (0.0f, (float) (bins - 1), (float) idx * shift);
+            peekSnap (src, reel, image);
+            c.mag[(size_t) idx] = reel;
+            c.phase[(size_t) idx] = image;
         }
     }
     else
@@ -755,6 +874,9 @@ void ChouchouFFTEQAudioProcessor::processEffectFrame (Chan& c, const float* scMa
         std::copy_n (tmpPhase.begin(), (size_t) bins, c.phase.begin());
     }
 
+    if (fftOn)
+        applyUltrasound (c, bins);
+
     const float mulReel = fftOn ? apvts.getRawParameterValue ("mulReel")->load() : 1.0f;
     const float mulImage = fftOn ? apvts.getRawParameterValue ("mulImage")->load() : 1.0f;
     for (int i = 0; i < bins; ++i)
@@ -814,11 +936,23 @@ void ChouchouFFTEQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     const bool autoGain = apvts.getRawParameterValue ("autoGain")->load() > 0.5f;
     const int scMode = (int) apvts.getRawParameterValue ("scMode")->load();
     const bool capture = apvts.getRawParameterValue ("scCapture")->load() > 0.5f;
-    const bool matchOn = apvts.getRawParameterValue ("scMatch")->load() > 0.5f
-                         && apvts.getRawParameterValue ("scAmount")->load() > 0.0001f
-                         && scMode > 0
-                         && scCh > 0;
-    const bool spectral = fftOn || matchOn;
+    const bool useBands = apvts.getRawParameterValue ("scUseBands")->load() > 0.5f;
+    const bool wantMatch = apvts.getRawParameterValue ("scMatch")->load() > 0.5f
+                           && apvts.getRawParameterValue ("scAmount")->load() > 0.0001f
+                           && scMode > 0;
+    // Snapshot can keep matching after Capture even if the sidechain cable is quiet;
+    // real-time still needs a live sidechain bus.
+    const bool matchOn = wantMatch && referenceValid && (scMode == 1 || scCh > 0);
+    if (scMode <= 0)
+        referenceValid = false;
+    if (! matchOn)
+        clearSidechainMatch();
+    else if (! useBands)
+        // Leaving the band path must drop leftover IIR peaks immediately, otherwise
+        // they keep shaping the wet signal until the next FFT hop.
+        dropSidechainBands();
+    // Bands are ordinary IIR peaks: they must not force the FFT chain on.
+    const bool spectral = fftOn || (matchOn && ! useBands);
 
     chouchoueq::BandSettings settings[(size_t) kMaxBands];
     const int bandCount = (int) apvts.getRawParameterValue ("bandCount")->load();
@@ -850,7 +984,8 @@ void ChouchouFFTEQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     }
 
     const int numCh = juce::jmin (2, numIn > 0 ? numIn : bufCh, bufCh);
-    const bool risingCapture = capture && ! lastCapture;
+    const bool pulsedCapture = capturePulse.exchange (false, std::memory_order_acq_rel);
+    const bool risingCapture = pulsedCapture || (capture && ! lastCapture);
     lastCapture = capture;
 
     const bool watch = displayOpen.load (std::memory_order_relaxed);
@@ -973,11 +1108,14 @@ void ChouchouFFTEQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 std::copy_n (scLive.begin(), (size_t) nBins, reference.begin());
                 referenceValid = true;
             }
-            else if (scMode == 1 && scCh > 0 && risingCapture && n == 0)
+
+            if (wantMatch && referenceValid && (scMode == 1 || scCh > 0) && useBands)
             {
-                std::copy_n (scLive.begin(), (size_t) nBins, reference.begin());
-                referenceValid = true;
+                computeMatchTarget (mainLive);
+                designSidechainBands();
             }
+            else if (! wantMatch || ! referenceValid || (scMode == 2 && scCh <= 0))
+                clearSidechainMatch();
 
             if (spectrumMutex.try_lock())
             {
@@ -1001,15 +1139,25 @@ void ChouchouFFTEQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     if (phOn && numCh > 1)
         phaseCapture.pushBlock (displayL.data(), displayR.data(), numSamples);
 
-    // Snapshot can be requested at any time; catch a rising edge that fell inside the block
-    // after the first sample by copying the spectrum gathered during this block.
+    // Snapshot Capture is a one-shot taken from the sidechain ring filled by this block.
     if (scMode == 1 && scCh > 0 && risingCapture)
     {
+        processAnalysis (scAnalyser, scLive);
         std::copy_n (scLive.begin(), (size_t) nBins, reference.begin());
         referenceValid = true;
+        if (wantMatch && useBands)
+        {
+            processAnalysis (mainAnalyser, mainLive);
+            computeMatchTarget (mainLive);
+            designSidechainBands();
+        }
         if (spectrumMutex.try_lock())
         {
             std::copy_n (reference.begin(), (size_t) nBins, pubRef.begin());
+            std::copy_n (matchDb.begin(), (size_t) nBins, pubMatch.begin());
+            pubMatchBands = matchBandCount;
+            if (matchBandCount > 0)
+                std::copy_n (scNodes.begin(), (size_t) matchBandCount, pubScBands.begin());
             spectrumMutex.unlock();
         }
     }

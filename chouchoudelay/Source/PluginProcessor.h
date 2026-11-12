@@ -1,12 +1,14 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "EchoFx.h"
 #include <array>
 #include <atomic>
 #include <memory>
 #include <vector>
 
-class ChouchouDelayAudioProcessor : public juce::AudioProcessor
+class ChouchouDelayAudioProcessor : public juce::AudioProcessor,
+                                    private juce::ChangeListener
 {
 public:
     static constexpr int    kMaxEchoes          = 32;
@@ -17,11 +19,12 @@ public:
     static constexpr double kMarginSeconds      = 0.05;
     static constexpr double kMinDecaySeconds    = 0.00001;
     static constexpr double kMaxDecaySeconds    = 60.0;
-    static constexpr double kDecayTargetDb      = -80.0;         // reached at the decay time
-    static constexpr float  kSilenceGain        = 1.0e-5f;       // -100 dB
-    static constexpr float  kLevelFloorDb       = -60.0f;        // treated as -inf
+    static constexpr double kDecayTargetDb      = -80.0;
+    static constexpr float  kSilenceGain        = 1.0e-5f;
+    static constexpr float  kLevelFloorDb       = -60.0f;
     static constexpr double kGainRampSeconds    = 0.02;
     static constexpr double kDelayRampSeconds   = 0.05;
+    static constexpr int    kDefaultFxFftOrder  = 9; // 512
 
     ChouchouDelayAudioProcessor();
     ~ChouchouDelayAudioProcessor() override;
@@ -61,6 +64,9 @@ public:
     static juce::String idRhythm (int echo) { return "rhythm" + juce::String (echo); }
     static juce::String idRhythmCount (int echo) { return "rhythmN" + juce::String (echo); }
     static juce::String idTuplet (int echo) { return "tuplet" + juce::String (echo); }
+    static juce::String idGateOn (int echo) { return "gateOn" + juce::String (echo); }
+    static juce::String idCompOn (int echo) { return "compOn" + juce::String (echo); }
+    static juce::String idInsBypass (int echo) { return "insBypass" + juce::String (echo); }
 
     static constexpr int kRhythmCount = 6;
     static constexpr int kTupletCount = 5;
@@ -69,7 +75,6 @@ public:
     static juce::String tupletName (int index);
     static double tupletFactor (int index);
 
-    // Echo model, computed from current parameter values. Echo indices are 1-based.
     double getSampleRateSafe() const { return currentSampleRate.load(); }
     int    getEchoCount() const;
     double getIntervalSeconds() const;
@@ -88,20 +93,40 @@ public:
     int    getEchoRhythmCount (int echo) const;
     int    getEchoTuplet (int echo) const;
 
-    // 0 manuel (intervalle en secondes), 1 analyse du signal, 2 tempo tapé.
     int    getTempoMode() const;
     float  getCurrentBpm() const;
     float  getDetectedBpm() const noexcept { return detectedBpm.load(); }
     float  getTapBpm() const noexcept { return tapBpm.load(); }
     void   tapTempo() noexcept;
 
-    // Delay buffer (sized from the echo count).
     static int computeBufferLength (int echoCapacity, double sampleRate);
     int          getBufferCapacityEchoes() const { return activeCapacity.load(); }
     int          getBufferLengthSamples() const  { return activeLength.load(); }
     int          getBufferChannels() const       { return activeChannels.load(); }
     juce::int64  getBufferBytes() const;
     bool         isBufferResizePending() const;
+
+    // Per-echo FX
+    bool isEchoGateOn (int echo) const;
+    bool isEchoCompOn (int echo) const;
+    bool isEchoInsertBypassed (int echo) const;
+    bool isEchoInsertLoaded (int echo) const;
+    juce::String getEchoInsertName (int echo) const;
+
+    juce::AudioPluginFormatManager& getFormatManager() noexcept { return formatManager; }
+    juce::KnownPluginList& getPluginList() noexcept { return pluginList; }
+
+    void loadEchoInsertAsync (int echo, const juce::PluginDescription& desc);
+    bool loadEchoInsertBlocking (int echo, const juce::PluginDescription& desc, juce::String& error);
+    void setEchoInsertForTest (int echo, std::shared_ptr<juce::AudioPluginInstance> instance);
+    void clearEchoInsert (int echo);
+    void setEchoInsertBypassed (int echo, bool shouldBypass);
+    std::unique_ptr<juce::AudioProcessorEditor> createEchoInsertEditor (int echo);
+    std::shared_ptr<juce::AudioPluginInstance> getEchoInsertShared (int echo) const;
+
+    int getFxLatencySamples() const noexcept { return reportedFxLatency.load(); }
+    void setUiStatus (const juce::String& text);
+    juce::String getUiStatus() const;
 
 private:
     struct DelayStore
@@ -127,6 +152,14 @@ private:
         float  panL = 1.0f, panR = 1.0f;
     };
 
+    struct EchoFxChain
+    {
+        TapGateEngine gate;
+        TapCompEngine comp;
+        EchoInsertSlot insert;
+        juce::AudioBuffer<float> buf;
+    };
+
     class ResizeWorker : public juce::Thread
     {
     public:
@@ -138,6 +171,8 @@ private:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout (ChouchouDelayAudioProcessor& self);
     static std::unique_ptr<DelayStore> makeStore (int echoCapacity, double sampleRate, int numChannels);
+    static int fftSizeChoiceToOrder (int choiceIndex) noexcept;
+    static bool isSelfDescription (const juce::PluginDescription& pd);
 
     void workerTick();
     void adoptPendingStore();
@@ -145,6 +180,14 @@ private:
     void freeAllStores();
     void analyseTempo (const float* left, const float* right, int numSamples, int numChannels);
     void estimateBpm();
+    void prepareEchoFx (double sr, int blockSize, int numChannels);
+    void applyFxFftSizes();
+    void updateReportedLatency();
+    void processEchoFx (int tapIndex, int numSamples, int numChannels, juce::MidiBuffer& midi);
+    void changeListenerCallback (juce::ChangeBroadcaster* source) override;
+    uint64_t beginInsertLoad (int echo);
+    bool isInsertLoadCurrent (int echo, uint64_t requestId) const;
+    void releaseInsert (EchoInsertSlot& slot);
 
     std::atomic<double> currentSampleRate { 48000.0 };
 
@@ -156,6 +199,31 @@ private:
     std::atomic<float>* pMix       = nullptr;
     std::atomic<float>* pTempoMode = nullptr;
     std::array<std::atomic<float>*, kMaxEchoes> pOn {}, pPitch {}, pFine {}, pLevel {}, pOffset {}, pPan {}, pRhythm {}, pRhythmCount {}, pTuplet {};
+    std::array<std::atomic<float>*, kMaxEchoes> pGateOn {}, pCompOn {}, pInsBypass {};
+
+    std::atomic<float>* pGateAmt = nullptr;
+    std::atomic<float>* pGateThresh = nullptr;
+    std::atomic<float>* pGateAtk = nullptr;
+    std::atomic<float>* pGateRel = nullptr;
+    std::atomic<float>* pGateMix = nullptr;
+    std::atomic<float>* pGateMakeup = nullptr;
+    std::atomic<float>* pGateAutoGain = nullptr;
+    std::atomic<float>* pGateFft = nullptr;
+
+    std::atomic<float>* pCompLowThresh = nullptr;
+    std::atomic<float>* pCompUpRatio = nullptr;
+    std::atomic<float>* pCompBoostAtk = nullptr;
+    std::atomic<float>* pCompBoostRel = nullptr;
+    std::atomic<float>* pCompBoostSpeed = nullptr;
+    std::atomic<float>* pCompHighThresh = nullptr;
+    std::atomic<float>* pCompDownRatio = nullptr;
+    std::atomic<float>* pCompGrAtk = nullptr;
+    std::atomic<float>* pCompGrRel = nullptr;
+    std::atomic<float>* pCompSpeed = nullptr;
+    std::atomic<float>* pCompMix = nullptr;
+    std::atomic<float>* pCompMakeup = nullptr;
+    std::atomic<float>* pCompAutoGain = nullptr;
+    std::atomic<float>* pCompFft = nullptr;
 
     std::vector<float> envRing, envWork;
     int envPos = 0, envCount = 0, hopFill = 0, envSince = 0;
@@ -170,10 +238,10 @@ private:
     std::array<TapState, kMaxEchoes> taps {};
     juce::SmoothedValue<float> mixSmoothed;
 
-    DelayStore* active = nullptr;                      // owned; audio thread (and prepare)
-    std::atomic<DelayStore*> activePtr { nullptr };    // read-only view for the worker
-    std::atomic<DelayStore*> pending   { nullptr };    // worker -> audio thread
-    std::atomic<DelayStore*> retired   { nullptr };    // audio thread -> worker (to free)
+    DelayStore* active = nullptr;
+    std::atomic<DelayStore*> activePtr { nullptr };
+    std::atomic<DelayStore*> pending   { nullptr };
+    std::atomic<DelayStore*> retired   { nullptr };
     std::atomic<juce::int64> publishedWritten { 0 };
 
     std::atomic<int> activeCapacity { 0 };
@@ -181,6 +249,27 @@ private:
     std::atomic<int> activeChannels { 0 };
 
     ResizeWorker worker { *this };
+
+    // FX
+    std::array<EchoFxChain, kMaxEchoes> echoFx {};
+    juce::AudioBuffer<float> wetSumBuf;
+    juce::AudioBuffer<float> insertScratch;
+    juce::AudioBuffer<float> dryDelayBuf;
+    int dryDelayWrite = 0;
+    int dryDelaySize = 0;
+    int preparedBlockSize = 512;
+    bool fxPrepared = false;
+
+    juce::AudioPluginFormatManager formatManager;
+    juce::KnownPluginList pluginList;
+    juce::ApplicationProperties appProperties;
+    mutable juce::CriticalSection insertLock;
+    std::shared_ptr<std::atomic<bool>> aliveFlag { std::make_shared<std::atomic<bool>> (true) };
+    std::atomic<uint64_t> nextLoadId { 1 };
+    std::atomic<uint64_t> restoreGeneration { 0 };
+    std::atomic<int> reportedFxLatency { 0 };
+    mutable juce::CriticalSection statusLock;
+    juce::String uiStatus;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChouchouDelayAudioProcessor)
 };

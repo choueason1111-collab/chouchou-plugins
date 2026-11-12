@@ -17,25 +17,19 @@ namespace
     const juce::Colour kText   { 0xffe8e6e3 };
     const juce::Colour kMuted  { 0xff9a9690 };
     const juce::Colour kDim    { 0xff3a3e44 };
-
-    // Force UTF-8 so French accents never depend on source-file code page
-    juce::String u8 (const char* utf8)
-    {
-        return juce::String::fromUTF8 (utf8);
-    }
 }
 
 //==============================================================================
 NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    titleLabel.setText ("chouchouEQGate2", juce::dontSendNotification);
+    titleLabel.setText (JucePlugin_Name, juce::dontSendNotification);
     titleLabel.setJustificationType (juce::Justification::centredLeft);
     titleLabel.setColour (juce::Label::textColourId, kText);
     titleLabel.setFont (juce::FontOptions (22.0f).withStyle ("Bold"));
     addAndMakeVisible (titleLabel);
 
-    subtitleLabel.setText ("Expand = fort+ / faible-  |  Gate = seulement faible-",
+    subtitleLabel.setText ("Spectral gate — weak bins cut, strong bins stay",
                            juce::dontSendNotification);
     subtitleLabel.setJustificationType (juce::Justification::centredLeft);
     subtitleLabel.setColour (juce::Label::textColourId, kMuted);
@@ -47,37 +41,12 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     infoLabel.setFont (juce::FontOptions (11.0f));
     addAndMakeVisible (infoLabel);
 
-    auto styleModeButton = [] (juce::TextButton& b)
-    {
-        b.setClickingTogglesState (true);
-        b.setColour (juce::TextButton::buttonColourId, kDim);
-        b.setColour (juce::TextButton::buttonOnColourId, kAccent);
-        b.setColour (juce::TextButton::textColourOffId, kText);
-        b.setColour (juce::TextButton::textColourOnId, kBg);
-    };
-
-    styleModeButton (expandButton);
-    styleModeButton (gateButton);
-    expandButton.setRadioGroupId (1001);
-    gateButton.setRadioGroupId (1001);
-    expandButton.setButtonText ("Expand");
-    gateButton.setButtonText (u8 ("Gate (faible-)"));
-    addAndMakeVisible (expandButton);
-    addAndMakeVisible (gateButton);
-
-    expandButton.onClick = [this]
-    {
-        if (auto* pMode = audioProcessor.getAPVTS().getParameter ("mode"))
-            pMode->setValueNotifyingHost (pMode->convertTo0to1 (0.0f));
-        updateModeButtons();
-    };
-
-    gateButton.onClick = [this]
-    {
-        if (auto* pMode = audioProcessor.getAPVTS().getParameter ("mode"))
-            pMode->setValueNotifyingHost (pMode->convertTo0to1 (1.0f));
-        updateModeButtons();
-    };
+    autoGainButton.setClickingTogglesState (true);
+    autoGainButton.setColour (juce::ToggleButton::textColourId, kText);
+    autoGainButton.setColour (juce::ToggleButton::tickColourId, kAccent);
+    autoGainButton.setColour (juce::ToggleButton::tickDisabledColourId, kMuted);
+    autoGainButton.setTooltip ("Matches wet level to the latency-aligned dry signal");
+    addAndMakeVisible (autoGainButton);
 
     setupSlider (amountSlider,    amountLabel,    "Amount");
     setupSlider (thresholdSlider, thresholdLabel, "Threshold");
@@ -86,7 +55,7 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     setupSlider (mixSlider,       mixLabel,       "Mix");
     setupSlider (makeupSlider,    makeupLabel,    "Makeup");
 
-    thresholdSlider.setTextValueSuffix (" dB");
+    thresholdSlider.setTextValueSuffix (" dBFS");
     attackSlider.setTextValueSuffix (" ms");
     releaseSlider.setTextValueSuffix (" ms");
     makeupSlider.setTextValueSuffix (" dB");
@@ -107,15 +76,15 @@ NewProjectAudioProcessorEditor::NewProjectAudioProcessorEditor (NewProjectAudioP
     addAndMakeVisible (fftCombo);
 
     auto& apvts = audioProcessor.getAPVTS();
-    amountAttachment    = std::make_unique<SliderAttachment> (apvts, "amt",    amountSlider);
+    amountAttachment    = std::make_unique<SliderAttachment> (apvts, "amt",       amountSlider);
     thresholdAttachment = std::make_unique<SliderAttachment> (apvts, "threshold", thresholdSlider);
     attackAttachment    = std::make_unique<SliderAttachment> (apvts, "attack",    attackSlider);
     releaseAttachment   = std::make_unique<SliderAttachment> (apvts, "release",   releaseSlider);
     mixAttachment       = std::make_unique<SliderAttachment> (apvts, "mix",       mixSlider);
     makeupAttachment    = std::make_unique<SliderAttachment> (apvts, "makeup",    makeupSlider);
     fftAttachment       = std::make_unique<ComboBoxAttachment> (apvts, "fftsize",  fftCombo);
+    autoGainAttachment  = std::make_unique<ButtonAttachment> (apvts, "autoGain",  autoGainButton);
 
-    updateModeButtons();
     updateInfoLabel();
     startTimerHz (8);
 
@@ -129,15 +98,7 @@ NewProjectAudioProcessorEditor::~NewProjectAudioProcessorEditor()
 
 void NewProjectAudioProcessorEditor::timerCallback()
 {
-    updateModeButtons();
     updateInfoLabel();
-}
-
-void NewProjectAudioProcessorEditor::updateModeButtons()
-{
-    const int mode = (int) audioProcessor.getAPVTS().getRawParameterValue ("mode")->load();
-    expandButton.setToggleState (mode == 0, juce::dontSendNotification);
-    gateButton.setToggleState   (mode == 1, juce::dontSendNotification);
 }
 
 void NewProjectAudioProcessorEditor::updateInfoLabel()
@@ -185,9 +146,8 @@ void NewProjectAudioProcessorEditor::resized()
     auto bounds = getLocalBounds().reduced (16);
 
     auto titleRow = bounds.removeFromTop (32);
-    titleLabel.setBounds (titleRow.removeFromLeft (220));
-    expandButton.setBounds (titleRow.removeFromLeft (100).reduced (4, 2));
-    gateButton.setBounds   (titleRow.removeFromLeft (140).reduced (4, 2));
+    titleLabel.setBounds (titleRow.removeFromLeft (280));
+    autoGainButton.setBounds (titleRow.removeFromLeft (110).reduced (4, 2));
 
     auto subRow = bounds.removeFromTop (22);
     subtitleLabel.setBounds (subRow);

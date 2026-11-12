@@ -15,6 +15,9 @@ public:
     static constexpr int kMaxFftOrder = 12;
     static constexpr int kMaxFftSize = 1 << kMaxFftOrder;
     static constexpr int kMaxBins = kMaxFftSize / 2 + 1;
+    static constexpr float kAbsMaxHz = (float) chouchoueq::kAbsMaxHz;
+    static constexpr float kDisplayLoHz = 1000.0f;   // 1 kHz
+    static constexpr float kDisplayHiHz = 60000.0f;  // 60 kHz
 
     ChouchouFFTEQAudioProcessor();
     ~ChouchouFFTEQAudioProcessor() override;
@@ -68,6 +71,7 @@ public:
     void copyMatch (std::vector<float>& gainDb, int& bandCount) const;
     void copyScBands (std::vector<ScBand>& bands) const;
     int getAnalysisHops() const noexcept { return analysisHops.load (std::memory_order_relaxed); }
+    void pulseCapture() noexcept { capturePulse.store (true, std::memory_order_release); }
 
     void setDisplayOpen (bool open) noexcept { displayOpen.store (open, std::memory_order_relaxed); }
     void pumpDisplays();
@@ -99,7 +103,13 @@ private:
     void readPolar (const std::vector<float>& spectrum, int idx, float& mag, float& phase) const noexcept;
     void writePolar (std::vector<float>& spectrum, int idx, float mag, float phase) const noexcept;
     void processEffectFrame (Chan& c, const float* scMag);
+    void applyUltrasound (Chan& c, int bins) noexcept;
     void processAnalysis (Analyser& a, std::vector<float>& dest);
+    void clearSidechainMatch() noexcept;
+    void dropSidechainBands() noexcept;
+    void computeMatchTarget (const std::vector<float>& mainMag);
+    void designSidechainBands();
+    bool sidechainMatchArmed() const noexcept;
 
     juce::AudioProcessorValueTreeState apvts;
     chouchoueq::GraphicEq eq;
@@ -133,6 +143,7 @@ private:
     int scFiltCount = 0;
     bool lastCapture = false;
     bool referenceValid = false;
+    std::atomic<bool> capturePulse { false };
 
     mutable std::mutex spectrumMutex;
     std::vector<float> pubMain, pubSc, pubRef, pubMatch;

@@ -31,13 +31,25 @@ namespace
     // Boost ignores empty FFT bins so the noise floor is not expanded to +30 dB.
     constexpr float kBoostNoiseFloorDb = -90.0f;
 
+    // Ten bands spanning 1 Hz … 96 kHz (Nyquist caps what FFT bins exist).
     int tessituraIndex (float hz) noexcept
     {
-        static constexpr float hi[] = { 60.0f, 120.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f, 12000.0f };
+        static constexpr float hi[] = {
+            60.0f, 120.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f, 20000.0f
+        };
         for (int i = 0; i < 9; ++i)
             if (hz < hi[i])
                 return i;
         return 9;
+    }
+
+    static const char* tessituraName (int index) noexcept
+    {
+        static constexpr const char* names[NewProjectAudioProcessor::kTessituras] = {
+            "1-60 Hz", "60-120 Hz", "120-250 Hz", "250-500 Hz", "0.5-1 kHz",
+            "1-2 kHz", "2-4 kHz", "4-8 kHz", "8-20 kHz", "20-96 kHz"
+        };
+        return names[(size_t) juce::jlimit (0, NewProjectAudioProcessor::kTessituras - 1, index)];
     }
 }
 
@@ -115,6 +127,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout NewProjectAudioProcessor::cr
         juce::NormalisableRange<float> { -24.0f, 24.0f, 0.1f }, 0.0f,
         juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "autoGain", 6 }, "Auto Gain", false));
+
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "fftsize", 5 }, "Window size",
         juce::StringArray { "512", "1024", "2048", "4096" },
@@ -127,16 +142,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout NewProjectAudioProcessor::cr
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { "compsc", 7 }, "Sidechain compression", false));
 
-    static const char* tessIds[NewProjectAudioProcessor::kTessituras] = {
-        "tess0", "tess1", "tess2", "tess3", "tess4", "tess5", "tess6", "tess7", "tess8", "tess9"
-    };
-    static const char* tessNames[NewProjectAudioProcessor::kTessituras] = {
-        "20-60 Hz", "60-120 Hz", "120-250 Hz", "250-500 Hz", "0.5-1 kHz",
-        "1-2 kHz", "2-4 kHz", "4-8 kHz", "8-12 kHz", "12-20 kHz"
-    };
     for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
+    {
+        const juce::String name = tessituraName (i);
         params.push_back (std::make_unique<juce::AudioParameterBool> (
-            juce::ParameterID { tessIds[i], 1 }, tessNames[i], true));
+            juce::ParameterID { "tessExp" + juce::String (i), 2 },
+            "Expand " + name, true));
+        params.push_back (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { "tessComp" + juce::String (i), 2 },
+            "Compress " + name, true));
+    }
 
     return { params.begin(), params.end() };
 }
@@ -397,6 +412,8 @@ void NewProjectAudioProcessor::applyFftSizeFromParameter (bool forceRebuild)
 
     for (auto& ch : channels)
         resetChannel (ch);
+
+    inPower = wetPower = 1.0e-8f;
 }
 
 void NewProjectAudioProcessor::applyFftSizeFromParameterLocked (bool forceRebuild)
@@ -426,6 +443,8 @@ void NewProjectAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
 {
     currentSampleRate = sampleRate;
     preparedBlockSize = samplesPerBlock;
+    agCoeff = 1.0f - std::exp (-1.0f / (0.03f * (float) juce::jmax (1.0, currentSampleRate)));
+    inPower = wetPower = 1.0e-8f;
 
     // Always keep stereo channel state available — nested hosts (Plugplugin / Insert)
     // can report 0 inputs briefly while still delivering a stereo in-place buffer.
@@ -556,17 +575,16 @@ void NewProjectAudioProcessor::processHop (ChannelState& ch,
         const float mag = binMag (re, im);
         const float hz = (float) binIndex * (float) currentSampleRate / (float) juce::jmax (1, fftSize);
         const int tess = tessituraIndex (hz);
-        const bool allowBand = hp.tessOn[tess];
+        const bool allowExp  = hp.tessExpOn[tess];
+        const bool allowComp = hp.tessCompOn[tess];
 
         float& b = ch.boostGain[(size_t) magIndex];
         float& g = ch.grGain[(size_t) magIndex];
         int& bDelay = ch.boostDelayHops[(size_t) magIndex];
         int& gDelay = ch.grDelayHops[(size_t) magIndex];
 
-        // A tessitura that is off bypasses both the expander and the compressor
-        // on this bin immediately. A slow release used to keep the old gain,
-        // so turning a band off still sounded like it was working.
-        if (! allowBand)
+        // Band off for a stage snaps that stage to unity immediately (no sticky release).
+        if (! allowExp && ! allowComp)
         {
             b = 1.0f;
             g = 1.0f;
@@ -587,76 +605,92 @@ void NewProjectAudioProcessor::processHop (ChannelState& ch,
         // STAGE 1 — BOOST (input or sidechain magnitude; Comp params ignored here)
         // Attack = wait N hops before moving; Speed = rate once engaged.
         //------------------------------------------------------------------
-        const float boostDetect = hp.useBoostSc ? scMag : mag;
-
-        float boostTarget = 1.0f;
-        if (! boostForceUnity)
-            boostTarget = juce::jlimit (1.0f, kGainCeil,
-                                        boostTargetGain (boostDetect, hp.boostThreshLin, hp.boostRatio));
-
-        const bool boostWants = boostTarget > 1.001f;
-
-        if (! boostWants)
+        if (! allowExp)
         {
+            b = 1.0f;
             bDelay = -1;
-            b += hp.boostRelCoeff * (1.0f - b);
         }
         else
         {
-            if (bDelay < 0)
-                bDelay = hp.boostAttackDelayHops;
+            const float boostDetect = hp.useBoostSc ? scMag : mag;
 
-            if (bDelay > 0)
-                --bDelay;
+            float boostTarget = 1.0f;
+            if (! boostForceUnity)
+                boostTarget = juce::jlimit (1.0f, kGainCeil,
+                                            boostTargetGain (boostDetect, hp.boostThreshLin, hp.boostRatio));
+
+            const bool boostWants = boostTarget > 1.001f;
+
+            if (! boostWants)
+            {
+                bDelay = -1;
+                b += hp.boostRelCoeff * (1.0f - b);
+            }
             else
-                b += hp.boostSpeedCoeff * (boostTarget - b);
-        }
+            {
+                if (bDelay < 0)
+                    bDelay = hp.boostAttackDelayHops;
 
-        if (std::abs (b - 1.0f) < 1.0e-4f) b = 1.0f;
+                if (bDelay > 0)
+                    --bDelay;
+                else
+                    b += hp.boostSpeedCoeff * (boostTarget - b);
+            }
 
-        if (b > 1.001f && mag >= meterFloorLin)
-        {
-            const float boostDb = juce::Decibels::gainToDecibels (b, 0.0f);
-            hopBoostDb = juce::jmax (hopBoostDb, boostDb);
-            tessBoostAccum[(size_t) tess] = juce::jmax (tessBoostAccum[(size_t) tess], boostDb);
+            if (std::abs (b - 1.0f) < 1.0e-4f) b = 1.0f;
+
+            if (b > 1.001f && mag >= meterFloorLin)
+            {
+                const float boostDb = juce::Decibels::gainToDecibels (b, 0.0f);
+                hopBoostDb = juce::jmax (hopBoostDb, boostDb);
+                tessBoostAccum[(size_t) tess] = juce::jmax (tessBoostAccum[(size_t) tess], boostDb);
+            }
         }
 
         //------------------------------------------------------------------
         // STAGE 2 — COMP (detects AFTER boost — true serial signal flow,
         // or directly from the sidechain spectrum)
         //------------------------------------------------------------------
-        const float compDetect = hp.useCompSc ? scMag : mag * b;
-
-        float grTarget = 1.0f;
-        if (! compForceUnity)
-            grTarget = juce::jlimit (kGainFloor, 1.0f,
-                                     grTargetGain (compDetect, hp.compThreshLin, hp.compRatio));
-
-        const bool grWants = grTarget < 0.999f;
-
-        if (! grWants)
+        if (! allowComp)
         {
+            g = 1.0f;
             gDelay = -1;
-            g += hp.compRelCoeff * (1.0f - g);
         }
         else
         {
-            if (gDelay < 0)
-                gDelay = hp.compAttackDelayHops;
+            const float compDetect = hp.useCompSc ? scMag : mag * b;
 
-            if (gDelay > 0)
-                --gDelay;
+            float grTarget = 1.0f;
+            if (! compForceUnity)
+                grTarget = juce::jlimit (kGainFloor, 1.0f,
+                                         grTargetGain (compDetect, hp.compThreshLin, hp.compRatio));
+
+            const bool grWants = grTarget < 0.999f;
+
+            if (! grWants)
+            {
+                gDelay = -1;
+                g += hp.compRelCoeff * (1.0f - g);
+            }
             else
-                g += hp.compSpeedCoeff * (grTarget - g);
-        }
+            {
+                if (gDelay < 0)
+                    gDelay = hp.compAttackDelayHops;
 
-        if (std::abs (g - 1.0f) < 1.0e-4f) g = 1.0f;
+                if (gDelay > 0)
+                    --gDelay;
+                else
+                    g += hp.compSpeedCoeff * (grTarget - g);
+            }
 
-        if (g < 0.999f)
-        {
-            const float grDb = -juce::Decibels::gainToDecibels (g, -80.0f);
-            hopGrDb = juce::jmax (hopGrDb, grDb);
-            tessAccum[(size_t) tess] = juce::jmax (tessAccum[(size_t) tess], grDb);
+            if (std::abs (g - 1.0f) < 1.0e-4f) g = 1.0f;
+
+            if (g < 0.999f)
+            {
+                const float grDb = -juce::Decibels::gainToDecibels (g, -80.0f);
+                hopGrDb = juce::jmax (hopGrDb, grDb);
+                tessAccum[(size_t) tess] = juce::jmax (tessAccum[(size_t) tess], grDb);
+            }
         }
 
         if (captureSpectrum && binIndex >= 0 && binIndex < (int) specMag.size())
@@ -774,6 +808,7 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     const float mix  = apvts.getRawParameterValue ("mix")->load();
     const float mkDb = apvts.getRawParameterValue ("makeup")->load();
+    const bool  autoGain = apvts.getRawParameterValue ("autoGain")->load() > 0.5f;
 
     const float hopSeconds = (float) hopSize / (float) juce::jmax (1.0, currentSampleRate);
 
@@ -815,7 +850,10 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     hp.useBoostSc = hasSidechain && apvts.getRawParameterValue ("boostsc")->load() > 0.5f;
     hp.useCompSc  = hasSidechain && apvts.getRawParameterValue ("compsc")->load()  > 0.5f;
     for (int i = 0; i < kTessituras; ++i)
-        hp.tessOn[i] = apvts.getRawParameterValue ("tess" + juce::String (i))->load() > 0.5f;
+    {
+        hp.tessExpOn[i]  = apvts.getRawParameterValue ("tessExp"  + juce::String (i))->load() > 0.5f;
+        hp.tessCompOn[i] = apvts.getRawParameterValue ("tessComp" + juce::String (i))->load() > 0.5f;
+    }
     std::fill (tessAccum.begin(), tessAccum.end(), 0.0f);
     std::fill (tessBoostAccum.begin(), tessBoostAccum.end(), 0.0f);
 
@@ -840,17 +878,22 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     bool didHop = false;
     const int waveStride = juce::jmax (1, (int) (currentSampleRate / 120.0));
 
-    for (int channel = 0; channel < numCh; ++channel)
-    {
-        auto& ch = channels[(size_t) channel];
-        auto* data = buffer.getWritePointer (channel);
-        const float* scData = hasSidechain
-                                ? scBuffer.getReadPointer (juce::jmin (channel, scCh - 1))
-                                : nullptr;
+    constexpr int kMaxCh = 8;
+    float dryS[kMaxCh] {}, wetS[kMaxCh] {}, dryInS[kMaxCh] {};
+    const int linkedCh = juce::jmin (numCh, kMaxCh);
 
-        for (int i = 0; i < numSamples; ++i)
+    for (int i = 0; i < numSamples; ++i)
+    {
+        for (int channel = 0; channel < linkedCh; ++channel)
         {
+            auto& ch = channels[(size_t) channel];
+            auto* data = buffer.getWritePointer (channel);
+            const float* scData = hasSidechain
+                                    ? scBuffer.getReadPointer (juce::jmin (channel, scCh - 1))
+                                    : nullptr;
+
             const float dryIn = data[i];
+            dryInS[channel] = dryIn;
 
             //------------------------------------------------------------------
             // STAGE 3 — MIX (latency-aligned dry vs wet from Stages 1+2)
@@ -871,24 +914,8 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                 --ch.outAvailable;
             }
 
-            data[i] = (1.0f - mix) * delayedDry + mix * wet;
-
-            if (channel == 0)
-            {
-                if (++waveHold >= waveStride)
-                {
-                    waveHold = 0;
-                    if (waveMutex.try_lock())
-                    {
-                        waveIn[(size_t) wavePos] = dryIn;
-                        waveOut[(size_t) wavePos] = data[i];
-                        waveGr[(size_t) wavePos] = liveGrDb;
-                        wavePos = (wavePos + 1) % kWavePoints;
-                        waveCount = juce::jmin (kWavePoints, waveCount + 1);
-                        waveMutex.unlock();
-                    }
-                }
-            }
+            dryS[channel] = delayedDry;
+            wetS[channel] = wet;
 
             if (ch.writePos == fftSize)
             {
@@ -899,6 +926,50 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                 blockGrDb = juce::jmax (blockGrDb, hopGr);
                 liveGrDb = hopGr;
                 didHop = true;
+            }
+        }
+
+        if (autoGain)
+        {
+            float ip = 0.0f, wp = 0.0f;
+            for (int ch = 0; ch < linkedCh; ++ch)
+            {
+                ip += dryS[ch] * dryS[ch];
+                wp += wetS[ch] * wetS[ch];
+            }
+            const float inv = 1.0f / (float) juce::jmax (1, linkedCh);
+            inPower += agCoeff * (ip * inv - inPower);
+            wetPower += agCoeff * (wp * inv - wetPower);
+            float g = 1.0f;
+            if (inPower > 1.0e-8f || wetPower > 1.0e-8f)
+                g = std::sqrt (inPower / juce::jmax (wetPower, 1.0e-12f));
+            g = juce::jlimit (0.03f, 30.0f, g);
+            for (int ch = 0; ch < linkedCh; ++ch)
+                wetS[ch] *= g;
+        }
+        else
+            inPower = wetPower = 1.0e-8f;
+
+        for (int channel = 0; channel < linkedCh; ++channel)
+        {
+            const float out = (1.0f - mix) * dryS[channel] + mix * wetS[channel];
+            buffer.getWritePointer (channel)[i] = out;
+
+            if (channel == 0)
+            {
+                if (++waveHold >= waveStride)
+                {
+                    waveHold = 0;
+                    if (waveMutex.try_lock())
+                    {
+                        waveIn[(size_t) wavePos] = dryInS[0];
+                        waveOut[(size_t) wavePos] = out;
+                        waveGr[(size_t) wavePos] = liveGrDb;
+                        wavePos = (wavePos + 1) % kWavePoints;
+                        waveCount = juce::jmin (kWavePoints, waveCount + 1);
+                        waveMutex.unlock();
+                    }
+                }
             }
         }
     }

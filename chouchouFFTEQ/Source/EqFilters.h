@@ -6,6 +6,13 @@
 
 namespace chouchoueq
 {
+static constexpr double kAbsMaxHz = 96000.0;
+
+inline double ceilingHz (double sampleRate) noexcept
+{
+    return juce::jmin (kAbsMaxHz, sampleRate > 0.0 ? sampleRate * 0.49 : kAbsMaxHz);
+}
+
 // Transposed direct-form II biquad, RBJ cookbook.
 struct Biquad
 {
@@ -342,7 +349,7 @@ public:
                 || s.delayMs != b.settings.delayMs)
                 changed = true;
 
-            const double hz = juce::jlimit (20.0, 20000.0, (double) s.freq);
+            const double hz = juce::jlimit (1.0, ceilingHz (sr), (double) s.freq);
             const double q = juce::jlimit (0.1, 18.0, (double) s.q);
             const auto designed = designBand (s.type, sr, hz, q, s.gainDb, s.slope, s.cutCalc);
             const int oldN = b.nSections;
@@ -415,10 +422,14 @@ public:
     {
         if (! active)
             return 0.0f;
+        const double maxHz = ceilingHz (sr);
+        if (hz <= 0.0 || hz > maxHz)
+            return 0.0f;
         if (engine == 0 || ! curveReady)
             return biquadResponseDb (hz);
 
-        const double t = std::log (juce::jlimit (20.0, 20000.0, hz) / 20.0) / std::log (1000.0);
+        const double minHz = 1.0;
+        const double t = std::log (juce::jlimit (minHz, maxHz, hz) / minHz) / std::log (maxHz / minHz);
         const float idx = juce::jlimit (0.0f, 255.0f, (float) t * 255.0f);
         const int i0 = (int) idx;
         const int i1 = juce::jmin (255, i0 + 1);
@@ -437,7 +448,7 @@ private:
         void set (int type, float sampleRate, float hz, float q, float gainDb) noexcept
         {
             const float nyquist = sampleRate * 0.49f;
-            hz = juce::jlimit (20.0f, nyquist, hz);
+            hz = juce::jlimit (1.0f, nyquist, hz);
             q = juce::jlimit (0.1f, 18.0f, q);
             const float A = std::pow (10.0f, gainDb / 40.0f);
             const float g0 = std::tan (juce::MathConstants<float>::pi * hz / sampleRate);
@@ -598,6 +609,10 @@ private:
 
     float biquadResponseDb (double hz) const noexcept
     {
+        // Above Nyquist the z-plane response wraps and draws "ghost" peaks.
+        const double maxHz = ceilingHz (sr);
+        if (hz <= 0.0 || hz > maxHz)
+            return 0.0f;
         float db = 0.0f;
         for (int i = 0; i < used; ++i)
             if (bands[(size_t) i].audible)
@@ -687,9 +702,11 @@ private:
 
     void bakeCurveFromKernel (const float* h, int taps) noexcept
     {
+        const double maxHz = ceilingHz (sr);
+        const double minHz = 1.0;
         for (int i = 0; i < 256; ++i)
         {
-            const double hz = 20.0 * std::pow (1000.0, (double) i / 255.0);
+            const double hz = minHz * std::pow (maxHz / minHz, (double) i / 255.0);
             const double w = juce::MathConstants<double>::twoPi * hz / sr;
             double re = 0.0, im = 0.0;
             for (int n = 0; n < taps; ++n)

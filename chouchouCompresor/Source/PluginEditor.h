@@ -69,9 +69,12 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
 private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+
+    enum class ViewMode { spectrum, wave, both };
 
     void timerCallback() override;
     void updateInfoLabel();
@@ -79,10 +82,13 @@ private:
     void updateMeters();
     void updateFftButtons();
     void setFftChoice (int index);
+    void cycleViewMode();
     void setupKnob (juce::Slider& s, juce::Label& l, const juce::String& text, juce::Colour fill);
     void paintWaveform (juce::Graphics& g, juce::Rectangle<int> area);
     void paintSpectrum (juce::Graphics& g, juce::Rectangle<int> area);
     juce::String compressedSummary() const;
+    float spectrumMinHz() const noexcept;
+    float spectrumMaxHz() const noexcept;
 
     NewProjectAudioProcessor& audioProcessor;
 
@@ -97,6 +103,7 @@ private:
     juce::Label mixLabel, makeupLabel;
     juce::Label titleLabel, subtitleLabel, infoLabel, fftLabel;
     juce::Label boostTitle, grTitle, inTitle, rowBoostLabel, rowGrLabel, rowMixLabel;
+    juce::Label tessExpLabel, tessCompLabel;
 
     juce::Label latencySectionLabel;
     juce::Label latencyValueLabel;
@@ -107,6 +114,7 @@ private:
     juce::TextButton fft512 { "512" }, fft1024 { "1024" }, fft2048 { "2048" }, fft4096 { "4096" };
 
     juce::ToggleButton boostScButton { "Sidechain" }, compScButton { "Sidechain" };
+    juce::ToggleButton autoGainButton { "Auto Gain" };
     juce::Label scTitle;
 
     MeterBar boostMeter, grMeter, inMeter, scMeter;
@@ -120,18 +128,21 @@ private:
                                       grAtkAttachment, grRelAttachment, compSpeedAttachment,
                                       mixAttachment, makeupAttachment;
 
-    std::unique_ptr<ButtonAttachment> boostScAttachment, compScAttachment;
-    std::array<juce::TextButton, NewProjectAudioProcessor::kTessituras> tessButtons;
-    std::array<std::unique_ptr<ButtonAttachment>, NewProjectAudioProcessor::kTessituras> tessAttachments;
+    std::unique_ptr<ButtonAttachment> boostScAttachment, compScAttachment, autoGainAttachment;
+    std::array<juce::TextButton, NewProjectAudioProcessor::kTessituras> tessExpButtons;
+    std::array<juce::TextButton, NewProjectAudioProcessor::kTessituras> tessCompButtons;
+    std::array<std::unique_ptr<ButtonAttachment>, NewProjectAudioProcessor::kTessituras> tessExpAttachments;
+    std::array<std::unique_ptr<ButtonAttachment>, NewProjectAudioProcessor::kTessituras> tessCompAttachments;
 
     std::vector<float> waveIn, waveOut, waveGr, specMag, specGr, specBoost;
     double specSr = 48000.0;
     int specFft = 2048;
     juce::TextButton viewButton { "Wave" };
-    bool showSpectrum = true;
+    ViewMode viewMode = ViewMode::spectrum;
     bool cursorOn = false;
     juce::Point<float> cursorPos;
     juce::Rectangle<int> waveBounds;
+    juce::Rectangle<int> spectrumBounds;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewProjectAudioProcessorEditor)
 };

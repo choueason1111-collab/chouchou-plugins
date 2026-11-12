@@ -59,26 +59,32 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p), apvts (p.getAPVTS()),
       analyserUi (apvts), phaseUi (apvts)
 {
-    setSize (920, 636);
+    setSize (1000, 700);
     setResizable (true, true);
-    setResizeLimits (780, 560, 1100, 740);
+    setResizeLimits (820, 600, 1280, 860);
 
     styleLabel (title, "ChouchouFFTEQ", 16.0f);
     addAndMakeVisible (title);
 
     eqOn.setButtonText ("EQ");
     autoGain.setButtonText ("Auto Gain");
+    usOn.setButtonText ("Ultrasound");
+    usOn.setTooltip ("Opens Ultra: display/edit 1-60 kHz (or Full Nyquist) and ultrasound DSP.");
     scMatch.setButtonText ("Copy spectrum");
     scFollow.setButtonText ("Pitch follow");
-    scCapture.setButtonText ("Capture");
     freeze.setButtonText ("Freeze");
     scUseBands.setButtonText ("Bands");
-    scUseBands.setTooltip ("Real bell filters, 1 to 1000, drawn like the EQ bands. Off: the full spectral copy, drawn on the graph. Real-time follows the sidechain. Snapshot keeps the capture.");
-    for (auto* b : { &eqOn, &autoGain, &scMatch, &scFollow, &scCapture, &freeze, &scUseBands })
+    scUseBands.setTooltip ("On: real bell filters (1 to 1000) shape the sound without forcing the FFT chain. Off: full spectral copy inside the FFT. Real-time follows the sidechain. Snapshot needs one Capture.");
+    for (auto* b : { &eqOn, &autoGain, &usOn, &scMatch, &scFollow, &freeze, &scUseBands })
     {
         styleToggle (*b);
         addAndMakeVisible (b);
     }
+    scCapture.setColour (juce::TextButton::buttonColourId, kBox);
+    scCapture.setColour (juce::TextButton::textColourOffId, kText);
+    scCapture.setTooltip ("Snapshot only: take one sidechain picture. Press again to replace it.");
+    scCapture.onClick = [this] { audioProcessor.pulseCapture(); };
+    addAndMakeVisible (scCapture);
     fftOn.setClickingTogglesState (true);
     fftOn.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2a2e33));
     fftOn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xfff2d56b));
@@ -133,9 +139,126 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
     styleLabel (fftCaption, "code", 13.0f);
     addAndMakeVisible (fftCaption);
     styleCombo (experimentBox);
-    experimentBox.addItemList (juce::StringArray { "0_chain", "1_shift", "2_split", "3_offset", "4_write" }, 1);
-    experimentBox.setTooltip ("0_chain keeps pitch, then formant. 1_shift, 2_split, 3_offset and 4_write are the other experiments.");
+    experimentBox.addItemList (juce::StringArray { "0_chain", "1_shift", "2_split", "3_offset", "4_write", "5_ultra" }, 1);
+    experimentBox.setTooltip ("0_chain keeps pitch, then formant. 1_shift, 2_split, 3_offset, 4_write, 5_ultra fold ultrasound bins with shift.");
     addAndMakeVisible (experimentBox);
+
+    const struct { const char* id; const char* name; const char* help; } ultraDefs[] = {
+        { "usFloor", "Floor", "Bins at or above this Hz are ultrasound." },
+        { "usGain", "Gain", "Gain in dB applied only above Floor." },
+        { "usTilt", "Tilt", "Tilts only the ultrasound region." },
+        { "usGate", "Gate", "Relative gate inside the ultrasound region." }
+    };
+    auto hzText = [] (double v)
+    {
+        if (v >= 1000.0)
+            return juce::String (v / 1000.0, v >= 10000.0 ? 1 : 2) + " kHz";
+        return juce::String (v, 0) + " Hz";
+    };
+    auto hzFromText = [] (const juce::String& text)
+    {
+        auto t = text.trim().toLowerCase();
+        const double n = t.getDoubleValue();
+        if (t.contains ("k"))
+            return n * 1000.0;
+        return n;
+    };
+    auto bindHzSlider = [&] (juce::Slider& s)
+    {
+        s.textFromValueFunction = hzText;
+        s.valueFromTextFunction = hzFromText;
+        s.setNumDecimalPlacesToDisplay (1);
+        s.updateText();
+    };
+    for (size_t i = 0; i < ultraKnobs.size(); ++i)
+    {
+        auto& k = ultraKnobs[i];
+        styleLinear (k.slider);
+        k.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 72, 16);
+        k.slider.setTooltip (ultraDefs[i].help);
+        addAndMakeVisible (k.slider);
+        styleLabel (k.name, ultraDefs[i].name, 12.0f);
+        addAndMakeVisible (k.name);
+        k.att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, ultraDefs[i].id, k.slider);
+        if (i == 0)
+            bindHzSlider (k.slider);
+        else if (i == 1)
+            k.slider.setTextValueSuffix (" dB");
+    }
+    for (auto* cell : { &ultraMin, &ultraMax })
+    {
+        styleLinear (cell->slider);
+        cell->slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 72, 16);
+        addAndMakeVisible (cell->slider);
+        addAndMakeVisible (cell->name);
+    }
+    styleLabel (ultraMin.name, "Min Hz", 12.0f);
+    styleLabel (ultraMax.name, "Max Hz", 12.0f);
+    ultraMin.slider.setTooltip ("Lowest frequency shown on the Ultra spectrum (Hz).");
+    ultraMax.slider.setTooltip ("Highest frequency shown on the Ultra spectrum (Hz, clamped by Nyquist).");
+    ultraMin.att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, "anMin", ultraMin.slider);
+    ultraMax.att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, "anMax", ultraMax.slider);
+    bindHzSlider (ultraMin.slider);
+    bindHzSlider (ultraMax.slider);
+
+    styleToggle (usSolo);
+    usSolo.setTooltip ("Mute bins below Floor; keep ultrasound only.");
+    addAndMakeVisible (usSolo);
+    styleToggle (ultraLinear);
+    ultraLinear.setTooltip ("Linear frequency axis (better for 1-60 kHz). Off = log.");
+    ultraLinear.onClick = [this]
+    {
+        setPlain ("anFreqScale", ultraLinear.getToggleState() ? 1.0f : 0.0f);
+    };
+    addAndMakeVisible (ultraLinear);
+
+    styleLabel (ultraHint, "Drag / dbl-click / wheel Q", 11.0f);
+    styleLabel (ultraRangeCaption, "Range", 12.0f);
+    styleLabel (ultraDspCaption, "US DSP", 12.0f);
+    addAndMakeVisible (ultraHint);
+    addAndMakeVisible (ultraRangeCaption);
+    addAndMakeVisible (ultraDspCaption);
+
+    auto styleRangeBtn = [] (juce::TextButton& b)
+    {
+        b.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff2a2e33));
+        b.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xfff2d56b));
+        b.setColour (juce::TextButton::textColourOffId, kText);
+        b.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1c1f24));
+    };
+    for (auto* b : { &rangeAudible, &range1to60, &rangeFull, &floor18, &floor20, &floor30, &ultraAddBand, &ultraRemoveBand })
+    {
+        styleRangeBtn (*b);
+        b->setClickingTogglesState (false);
+        addAndMakeVisible (b);
+    }
+    for (auto* b : { &rangeAudible, &range1to60, &rangeFull })
+        b->setClickingTogglesState (true);
+    rangeAudible.setButtonText ("20-20k");
+    range1to60.setButtonText ("1-60k");
+    rangeFull.setButtonText ("Full");
+    rangeAudible.setTooltip ("Show 20 Hz - 20 kHz.");
+    range1to60.setTooltip ("Show 1 kHz - 60 kHz (clamped to Nyquist). Best for ultrasound editing.");
+    rangeFull.setTooltip ("Show 20 Hz to Nyquist of the current sample rate.");
+    rangeAudible.onClick = [this] { applyDisplayRange (20.0f, 20000.0f, false); };
+    range1to60.onClick = [this]
+    {
+        applyDisplayRange (ChouchouFFTEQAudioProcessor::kDisplayLoHz,
+                           ChouchouFFTEQAudioProcessor::kDisplayHiHz,
+                           true);
+    };
+    rangeFull.onClick = [this] { applyDisplayRange (20.0f, displayNyquist(), true); };
+    floor18.onClick = [this] { setPlain ("usFloor", 18000.0f); };
+    floor20.onClick = [this] { setPlain ("usFloor", 20000.0f); };
+    floor30.onClick = [this] { setPlain ("usFloor", 30000.0f); };
+    ultraAddBand.onClick = [this]
+    {
+        const float mid = 0.5f * (apvts.getRawParameterValue ("anMin")->load()
+                                  + apvts.getRawParameterValue ("anMax")->load());
+        setPlain ("eqOn", 1.0f);
+        addBandAt (mid, 0.0f);
+    };
+    ultraRemoveBand.onClick = [this] { removeSelectedBand(); };
 
     eqCaption.setVisible (false);
     bandViewport.setScrollBarsShown (true, false);
@@ -261,10 +384,11 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
     eqAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "eqOn", eqOn);
     fftAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "fftOn", fftOn);
     agAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "autoGain", autoGain);
+    usAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "usOn", usOn);
+    usSoloAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "usSolo", usSolo);
     matchAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "scMatch", scMatch);
     followAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "scFollow", scFollow);
     scUseBandsAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "scUseBands", scUseBands);
-    capAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "scCapture", scCapture);
     freezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, "freeze", freeze);
     mixAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, "mix", mix);
     amountAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, "scAmount", scAmount);
@@ -274,7 +398,7 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
     engineAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (apvts, "eqEngine", eqEngine);
     experimentAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (apvts, "experiment", experimentBox);
 
-    for (auto* b : { &pageEq, &pageSpec, &pagePhase })
+    for (auto* b : { &pageEq, &pageSpec, &pagePhase, &pageUltra })
     {
         b->setRadioGroupId (4401);
         b->setClickingTogglesState (true);
@@ -288,6 +412,7 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
     pageEq.onClick = [this] { showPage (0); };
     pageSpec.onClick = [this] { showPage (1); };
     pagePhase.onClick = [this] { showPage (2); };
+    pageUltra.onClick = [this] { showPage (3); };
 
     addAndMakeVisible (analyserUi);
     addAndMakeVisible (phaseUi);
@@ -296,6 +421,8 @@ ChouchouFFTEQEditor::ChouchouFFTEQEditor (ChouchouFFTEQAudioProcessor& p)
     analyserUi.capB.onClick = [this] { slotB = anFrame.db; };
 
     apvts.addParameterListener ("bandCount", this);
+    apvts.addParameterListener ("usOn", this);
+    lastUsOn = apvts.getRawParameterValue ("usOn")->load() > 0.5f;
     audioProcessor.setDisplayOpen (true);
     startTimerHz (timerHz);
 }
@@ -304,24 +431,96 @@ ChouchouFFTEQEditor::~ChouchouFFTEQEditor()
 {
     audioProcessor.setDisplayOpen (false);
     apvts.removeParameterListener ("bandCount", this);
+    apvts.removeParameterListener ("usOn", this);
 }
 
-void ChouchouFFTEQEditor::parameterChanged (const juce::String&, float)
+float ChouchouFFTEQEditor::displayNyquist() const noexcept
 {
-    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<ChouchouFFTEQEditor> (this)]
+    return (float) juce::jmin ((double) ChouchouFFTEQAudioProcessor::kAbsMaxHz,
+                               juce::jmax (1000.0, audioProcessor.getCurrentSampleRate() * 0.49));
+}
+
+float ChouchouFFTEQEditor::clampEditableHz (float hz) const noexcept
+{
+    return juce::jlimit (1.0f, displayNyquist(), hz);
+}
+
+void ChouchouFFTEQEditor::applyDisplayRange (float minHz, float maxHz, bool linearScale)
+{
+    const float nyquist = displayNyquist();
+    float lo = juce::jlimit (1.0f, nyquist - 10.0f, minHz);
+    float hi = juce::jlimit (lo + 10.0f, nyquist, maxHz);
+    setPlain ("anMin", lo);
+    setPlain ("anMax", hi);
+    setPlain ("anFreqScale", linearScale ? 1.0f : 0.0f);
+    setPlain ("anOn", 1.0f);
+    ultraLinear.setToggleState (linearScale, juce::dontSendNotification);
+    updateUltraReadout();
+    repaint();
+}
+
+void ChouchouFFTEQEditor::updateUltraReadout()
+{
+    const float lo = apvts.getRawParameterValue ("anMin")->load();
+    const float hi = apvts.getRawParameterValue ("anMax")->load();
+    const float floorHz = apvts.getRawParameterValue ("usFloor")->load();
+    const bool linear = apvts.getRawParameterValue ("anFreqScale")->load() > 0.5f;
+    auto fmt = [] (float hz)
     {
-        if (safe != nullptr)
+        if (hz >= 1000.0f)
+            return juce::String (hz / 1000.0f, hz >= 10000.0f ? 1 : 2) + " kHz";
+        return juce::String (juce::roundToInt (hz)) + " Hz";
+    };
+    ultraHint.setText (fmt (lo) + " -> " + fmt (hi)
+                           + " | floor " + fmt (floorHz)
+                           + " | " + (linear ? "linear" : "log")
+                           + " | Nyquist " + fmt (displayNyquist()),
+                       juce::dontSendNotification);
+    ultraLinear.setToggleState (linear, juce::dontSendNotification);
+
+    const bool nearAudible = std::abs (lo - 20.0f) < 5.0f && std::abs (hi - 20000.0f) < 50.0f;
+    const bool near160 = std::abs (lo - 1000.0f) < 50.0f
+                         && std::abs (hi - juce::jmin (60000.0f, displayNyquist())) < 100.0f;
+    const bool nearFull = std::abs (lo - 20.0f) < 5.0f && std::abs (hi - displayNyquist()) < 100.0f;
+    rangeAudible.setToggleState (nearAudible, juce::dontSendNotification);
+    range1to60.setToggleState (near160, juce::dontSendNotification);
+    rangeFull.setToggleState (nearFull, juce::dontSendNotification);
+}
+
+void ChouchouFFTEQEditor::applyUltrasoundView()
+{
+    applyDisplayRange (ChouchouFFTEQAudioProcessor::kDisplayLoHz,
+                       ChouchouFFTEQAudioProcessor::kDisplayHiHz,
+                       true);
+    showPage (3);
+}
+
+void ChouchouFFTEQEditor::parameterChanged (const juce::String& parameterID, float)
+{
+    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<ChouchouFFTEQEditor> (this), parameterID]
+    {
+        if (safe == nullptr)
+            return;
+        if (parameterID == "usOn")
         {
-            safe->selectedBand = juce::jlimit (0, juce::jmax (0, safe->shownBands() - 1), safe->selectedBand);
-            safe->resized();
+            const bool on = safe->apvts.getRawParameterValue ("usOn")->load() > 0.5f;
+            if (on && ! safe->lastUsOn)
+                safe->applyUltrasoundView();
+            safe->lastUsOn = on;
         }
+        safe->selectedBand = juce::jlimit (0, juce::jmax (0, safe->shownBands() - 1), safe->selectedBand);
+        safe->resized();
     });
 }
 
 void ChouchouFFTEQEditor::showPage (int page)
 {
-    viewPage = juce::jlimit (0, 2, page);
-    if (viewPage == 1)
+    viewPage = juce::jlimit (0, 3, page);
+    pageEq.setToggleState (viewPage == 0, juce::dontSendNotification);
+    pageSpec.setToggleState (viewPage == 1, juce::dontSendNotification);
+    pagePhase.setToggleState (viewPage == 2, juce::dontSendNotification);
+    pageUltra.setToggleState (viewPage == 3, juce::dontSendNotification);
+    if (viewPage == 1 || viewPage == 3)
         setPlain ("anOn", 1.0f);
     if (viewPage == 2)
         setPlain ("phOn", 1.0f);
@@ -364,6 +563,8 @@ void ChouchouFFTEQEditor::timerCallback()
     }
     updateFftCode();
     syncCutRows();
+    if (viewPage == 3)
+        updateUltraReadout();
     repaint();
 }
 
@@ -386,6 +587,9 @@ void ChouchouFFTEQEditor::updateFftCode()
         case 4:
             line = "writeidx = wrap(round(idx * shift), bins);\noutReel[writeidx] += reel * cos(image) * mulreel;   outImage[writeidx] += reel * sin(image) * mulimage;";
             break;
+        case 5:
+            line = "if (idx >= floorBin) peekPolar(idx * shift, reel, image);\nre = reel * cos(image) * mulreel;   im = reel * sin(image) * mulimage;";
+            break;
         default:
             line = "src = idx * pitch;   reel, image = peek(src);\nre = reel * cos(image) * mulreel;   im = reel * sin(image) * mulimage;";
             break;
@@ -405,7 +609,7 @@ void ChouchouFFTEQEditor::updateFftCode()
     mark ({ 3, 4, 7, 8, 9, 10, 11 });
     if (experiment == 0)
         mark ({ 5, 6 });
-    if (experiment == 1 || experiment == 4)
+    if (experiment == 1 || experiment == 4 || experiment == 5)
         mark ({ 0 });
     if (experiment == 2)
         mark ({ 1, 2 });
@@ -523,7 +727,7 @@ void ChouchouFFTEQEditor::addBandAt (float hz, float db)
     setPlain ("bandCount", (float) (n + 1));
     setPlain (id ("on"), 1.0f);
     setPlain (id ("type"), 0.0f);
-    setPlain (id ("freq"), hz);
+    setPlain (id ("freq"), clampEditableHz (hz));
     setPlain (id ("gain"), db);
     setPlain (id ("q"), 0.707f);
     setPlain (id ("dly"), 0.0f);
@@ -580,7 +784,7 @@ void ChouchouFFTEQEditor::mouseDrag (const juce::MouseEvent& e)
         setPlain (id ("q"), q);
         return;
     }
-    setPlain (id ("freq"), xToHz (e.position.x));
+    setPlain (id ("freq"), clampEditableHz (xToHz (e.position.x)));
     const int type = (int) std::lround (apvts.getRawParameterValue (id ("type"))->load());
     if (type <= 2)
         setPlain (id ("gain"), yToDb (e.position.y));
@@ -636,13 +840,63 @@ void ChouchouFFTEQEditor::drawSpectrum (juce::Graphics& g, juce::Rectangle<int> 
 {
     g.setColour (juce::Colour (0xff14181c));
     g.fillRoundedRectangle (area.toFloat(), 6.0f);
-    g.setColour (juce::Colour (0xff2c333a));
-    for (float hz : { 100.0f, 1000.0f, 10000.0f })
+    const float lo = apvts.getRawParameterValue ("anMin")->load();
+    const float hi = apvts.getRawParameterValue ("anMax")->load();
+    auto axisHz = [] (float hz) -> juce::String
     {
+        if (hz >= 1000.0f)
+            return juce::String (hz / 1000.0f, hz >= 10000.0f ? 0 : 1) + " kHz";
+        return juce::String (juce::roundToInt (hz)) + " Hz";
+    };
+    const float ticks[] { 1.0f, 100.0f, 1000.0f, 5000.0f, 10000.0f, 15000.0f, 20000.0f,
+                          30000.0f, 40000.0f, 48000.0f, 60000.0f, 80000.0f, 96000.0f };
+    g.setColour (juce::Colour (0xff2c333a));
+    g.setFont (juce::FontOptions (10.0f));
+    float lastLabelX = -1000.0f;
+    for (float hz : ticks)
+    {
+        if (hz <= lo + 1.0f || hz >= hi - 1.0f)
+            continue;
         const float x = (float) area.getX() + displayT (hz) * (float) area.getWidth();
-        g.drawVerticalLine ((int) x, (float) area.getY() + 18.0f, (float) area.getBottom() - 6.0f);
+        g.drawVerticalLine ((int) x, (float) area.getY() + 18.0f, (float) area.getBottom() - 18.0f);
+        if (x - lastLabelX >= 52.0f)
+        {
+            g.setColour (juce::Colour (0xff9aa3ad));
+            g.drawText (axisHz (hz), (int) x - 28, area.getBottom() - 16, 56, 14, juce::Justification::centred);
+            lastLabelX = x;
+        }
+        g.setColour (juce::Colour (0xff2c333a));
+    }
+    const float nyquist = displayNyquist();
+    if (nyquist > lo && nyquist < hi)
+    {
+        const float nx = (float) area.getX() + displayT (nyquist) * (float) area.getWidth();
+        g.setColour (juce::Colour (0xffe29a4a).withAlpha (0.85f));
+        const float dashY0 = (float) area.getY() + 18.0f;
+        const float dashY1 = (float) area.getBottom() - 18.0f;
+        for (float y = dashY0; y < dashY1; y += 8.0f)
+            g.drawLine (nx, y, nx, juce::jmin (y + 4.0f, dashY1), 1.2f);
+        g.setFont (juce::FontOptions (10.0f));
+        g.drawText ("Nyquist", (int) nx - 28, area.getY() + 4, 56, 12, juce::Justification::centred);
+    }
+    g.setColour (juce::Colour (0xffc8cdd3));
+    g.setFont (juce::FontOptions (11.0f));
+    g.drawText (axisHz (lo), area.getX() + 6, area.getBottom() - 16, 72, 14, juce::Justification::left);
+    g.drawText (axisHz (hi), area.getRight() - 78, area.getBottom() - 16, 72, 14, juce::Justification::right);
+    if (apvts.getRawParameterValue ("usOn")->load() > 0.5f)
+    {
+        const float floorHz = apvts.getRawParameterValue ("usFloor")->load();
+        if (floorHz > lo && floorHz < hi)
+        {
+            const float x = (float) area.getX() + displayT (floorHz) * (float) area.getWidth();
+            g.setColour (juce::Colour (0xff7ec8e3));
+            g.drawVerticalLine ((int) x, (float) area.getY() + 16.0f, (float) area.getBottom() - 18.0f);
+            g.setFont (juce::FontOptions (10.0f));
+            g.drawText ("US", (int) x - 14, area.getY() + 18, 28, 12, juce::Justification::centred);
+        }
     }
     const float y0 = (float) area.getCentreY();
+    g.setColour (juce::Colour (0xff2c333a));
     g.drawHorizontalLine ((int) y0, (float) area.getX() + 4.0f, (float) area.getRight() - 4.0f);
 
     const float refDb = apvts.getRawParameterValue ("anRef")->load();
@@ -657,7 +911,7 @@ void ChouchouFFTEQEditor::drawSpectrum (juce::Graphics& g, juce::Rectangle<int> 
         else
             t = (db - (refDb - dbSpan)) / dbSpan;
         t = juce::jlimit (0.0f, 1.0f, t);
-        return (float) area.getBottom() - 8.0f - t * (float) (area.getHeight() - 22);
+        return (float) area.getBottom() - 18.0f - t * (float) (area.getHeight() - 36);
     };
     auto strokeDb = [&] (const std::vector<float>& db, juce::Colour colour)
     {
@@ -744,13 +998,21 @@ void ChouchouFFTEQEditor::drawSpectrum (juce::Graphics& g, juce::Rectangle<int> 
     if (apvts.getRawParameterValue ("eqOn")->load() > 0.5f && mode != 4)
     {
         juce::Path curve;
+        bool started = false;
+        const float nyq = displayNyquist();
         for (int x = 0; x < area.getWidth(); ++x)
         {
             const float t = (float) x / (float) juce::jmax (1, area.getWidth() - 1);
-            const float db = juce::jlimit (-24.0f, 24.0f, audioProcessor.responseDb (displayHz (t)));
+            const float hz = displayHz (t);
+            if (hz > nyq)
+                break;
+            const float db = juce::jlimit (-24.0f, 24.0f, audioProcessor.responseDb (hz));
             const float y = (float) area.getCentreY() - db / 24.0f * (float) area.getHeight() * 0.45f;
-            if (x == 0)
-                curve.startNewSubPath ((float) area.getX(), y);
+            if (! started)
+            {
+                curve.startNewSubPath ((float) (area.getX() + x), y);
+                started = true;
+            }
             else
                 curve.lineTo ((float) (area.getX() + x), y);
         }
@@ -761,6 +1023,7 @@ void ChouchouFFTEQEditor::drawSpectrum (juce::Graphics& g, juce::Rectangle<int> 
     if (! scNodes.empty())
     {
         const double sr = audioProcessor.getCurrentSampleRate();
+        const float nyq = displayNyquist();
         const int step = scNodes.size() > 80 ? 4 : 1;
         juce::Path action;
         bool started = false;
@@ -768,6 +1031,8 @@ void ChouchouFFTEQEditor::drawSpectrum (juce::Graphics& g, juce::Rectangle<int> 
         {
             const float t = (float) x / (float) juce::jmax (1, area.getWidth() - 1);
             const float hz = displayHz (t);
+            if (hz > nyq)
+                break;
             float db = 0.0f;
             for (const auto& band : scNodes)
                 db += chouchoueq::Biquad::peak (sr, band.hz, band.q, band.db).responseDb (hz, sr);
@@ -1109,26 +1374,29 @@ void ChouchouFFTEQEditor::resized()
     auto area = getLocalBounds().reduced (10, 8);
 
     auto header = area.removeFromTop (28);
-    title.setBounds (header.removeFromLeft (150));
-    eqOn.setBounds (header.removeFromLeft (52));
-    fftOn.setBounds (header.removeFromLeft (64).reduced (2, 2));
-    autoGain.setBounds (header.removeFromLeft (92));
-    freeze.setBounds (header.removeFromLeft (64));
-    windowLabel.setBounds (header.removeFromLeft (92));
-    fftSize.setBounds (header.removeFromLeft (78).reduced (0, 2));
-    mixCaption.setBounds (header.removeFromLeft (58));
+    title.setBounds (header.removeFromLeft (140));
+    eqOn.setBounds (header.removeFromLeft (48));
+    fftOn.setBounds (header.removeFromLeft (56).reduced (2, 2));
+    autoGain.setBounds (header.removeFromLeft (84));
+    usOn.setBounds (header.removeFromLeft (92));
+    freeze.setBounds (header.removeFromLeft (58));
+    windowLabel.setBounds (header.removeFromLeft (84));
+    fftSize.setBounds (header.removeFromLeft (72).reduced (0, 2));
+    mixCaption.setBounds (header.removeFromLeft (52));
     mix.setBounds (header.reduced (0, 4));
 
     area.removeFromTop (6);
     const bool eqPage = viewPage == 0;
-    const int bottomH = eqPage ? 346 : (viewPage == 1 ? 96 : 76);
+    const bool ultraPage = viewPage == 3;
+    const int bottomH = eqPage ? 346 : (viewPage == 1 ? 96 : (ultraPage ? 168 : 76));
     auto bottom = area.removeFromBottom (bottomH);
     area.removeFromTop (4);
     spectrumArea = area;
     auto tabs = spectrumArea.removeFromTop (22);
-    pagePhase.setBounds (tabs.removeFromRight (78).reduced (2, 1));
-    pageSpec.setBounds (tabs.removeFromRight (96).reduced (2, 1));
-    pageEq.setBounds (tabs.removeFromRight (52).reduced (2, 1));
+    pageUltra.setBounds (tabs.removeFromRight (64).reduced (2, 1));
+    pagePhase.setBounds (tabs.removeFromRight (72).reduced (2, 1));
+    pageSpec.setBounds (tabs.removeFromRight (88).reduced (2, 1));
+    pageEq.setBounds (tabs.removeFromRight (48).reduced (2, 1));
 
     analyserUi.setVisible (viewPage == 1);
     phaseUi.setVisible (viewPage == 2);
@@ -1143,7 +1411,7 @@ void ChouchouFFTEQEditor::resized()
         k.name.setVisible (eqPage);
     }
     fftCaption.setVisible (eqPage);
-    experimentBox.setVisible (eqPage);
+    experimentBox.setVisible (eqPage || ultraPage);
     bandViewport.setVisible (eqPage && shownBands() > 0);
     scMode.setVisible (eqPage);
     scCapture.setVisible (eqPage);
@@ -1158,6 +1426,70 @@ void ChouchouFFTEQEditor::resized()
     eqEngine.setVisible (eqPage);
     addBand.setVisible (eqPage);
     removeBand.setVisible (eqPage);
+
+    for (auto& k : ultraKnobs)
+    {
+        k.slider.setVisible (ultraPage);
+        k.name.setVisible (ultraPage);
+    }
+    ultraMin.slider.setVisible (ultraPage);
+    ultraMin.name.setVisible (ultraPage);
+    ultraMax.slider.setVisible (ultraPage);
+    ultraMax.name.setVisible (ultraPage);
+    usSolo.setVisible (ultraPage);
+    ultraLinear.setVisible (ultraPage);
+    ultraHint.setVisible (ultraPage);
+    ultraRangeCaption.setVisible (ultraPage);
+    ultraDspCaption.setVisible (ultraPage);
+    for (auto* b : { &rangeAudible, &range1to60, &rangeFull, &floor18, &floor20, &floor30, &ultraAddBand, &ultraRemoveBand })
+        b->setVisible (ultraPage);
+
+    if (ultraPage)
+    {
+        fftCodeArea = {};
+        auto status = bottom.removeFromTop (22);
+        experimentBox.setBounds (status.removeFromLeft (120).reduced (0, 1));
+        ultraLinear.setBounds (status.removeFromLeft (70));
+        usSolo.setBounds (status.removeFromLeft (58));
+        ultraAddBand.setBounds (status.removeFromRight (78).reduced (2, 1));
+        ultraRemoveBand.setBounds (status.removeFromRight (70).reduced (2, 1));
+        ultraHint.setBounds (status.reduced (6, 0));
+
+        auto rangeRow = bottom.removeFromTop (28);
+        ultraRangeCaption.setBounds (rangeRow.removeFromLeft (48));
+        rangeAudible.setBounds (rangeRow.removeFromLeft (70).reduced (2, 2));
+        range1to60.setBounds (rangeRow.removeFromLeft (64).reduced (2, 2));
+        rangeFull.setBounds (rangeRow.removeFromLeft (52).reduced (2, 2));
+        {
+            auto cell = rangeRow.removeFromLeft (rangeRow.getWidth() / 2).reduced (3, 1);
+            ultraMin.name.setBounds (cell.removeFromLeft (52));
+            ultraMin.slider.setBounds (cell);
+        }
+        {
+            auto cell = rangeRow.reduced (3, 1);
+            ultraMax.name.setBounds (cell.removeFromLeft (52));
+            ultraMax.slider.setBounds (cell);
+        }
+
+        auto dspCap = bottom.removeFromTop (22);
+        ultraDspCaption.setBounds (dspCap.removeFromLeft (52));
+        floor18.setBounds (dspCap.removeFromLeft (78).reduced (2, 1));
+        floor20.setBounds (dspCap.removeFromLeft (78).reduced (2, 1));
+        floor30.setBounds (dspCap.removeFromLeft (78).reduced (2, 1));
+
+        auto knobsRow = bottom.removeFromTop (34);
+        const int cellW = knobsRow.getWidth() / (int) ultraKnobs.size();
+        for (auto& k : ultraKnobs)
+        {
+            auto cell = knobsRow.removeFromLeft (cellW).reduced (4, 2);
+            k.name.setBounds (cell.removeFromLeft (44));
+            k.slider.setBounds (cell);
+        }
+        updateUltraReadout();
+        layoutBands();
+        return;
+    }
+
     if (! eqPage)
     {
         fftCodeArea = {};
@@ -1167,7 +1499,7 @@ void ChouchouFFTEQEditor::resized()
 
     auto expRow = bottom.removeFromTop (24);
     bottom.removeFromTop (6);
-    fftCodeArea = eqPage ? bottom.removeFromTop (48) : juce::Rectangle<int>();
+    fftCodeArea = bottom.removeFromTop (48);
     bottom.removeFromTop (2);
     for (int row = 0; row < 4; ++row)
     {

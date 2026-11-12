@@ -18,17 +18,26 @@ juce_add_plugin(chouchouDelay
     FORMATS ${CHOUCHOU_PLUGIN_FORMATS}
     AAX_CATEGORY Delay
     PRODUCT_NAME "chouchouDelay"
-    DESCRIPTION "Multi-tap delay with pan, tap tempo, real-time tempo and note rhythms"
+    DESCRIPTION "Multi-tap delay with pan, tap tempo, real-time tempo, per-echo gate/comp/insert"
     VST3_CATEGORIES Fx Delay)
 
 juce_generate_juce_header(chouchouDelay)
 
-target_sources(chouchouDelay
-    PRIVATE
-        Source/PluginProcessor.cpp
-        Source/PluginEditor.cpp)
+set(CHOUCHOU_DELAY_SOURCES
+    Source/PluginProcessor.cpp
+    Source/PluginEditor.cpp
+    Source/EchoFx.cpp
+    Source/PluginScanSupport.cpp)
+
+target_sources(chouchouDelay PRIVATE ${CHOUCHOU_DELAY_SOURCES})
 
 chouchou_plugin_defaults(chouchouDelay)
+
+target_compile_definitions(chouchouDelay
+    PUBLIC
+        JUCE_PLUGINHOST_VST3=1
+        JUCE_PLUGINHOST_AU=1
+        JUCE_PLUGINHOST_VST=0)
 
 target_link_libraries(chouchouDelay
     PRIVATE
@@ -41,19 +50,27 @@ target_link_libraries(chouchouDelay
 
 juce_add_console_app(DelaySelfTest PRODUCT_NAME "DelaySelfTest")
 juce_generate_juce_header(DelaySelfTest)
-target_sources(DelaySelfTest PRIVATE Tools/DelaySelfTest/main.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
+target_sources(DelaySelfTest PRIVATE Tools/DelaySelfTest/main.cpp ${CHOUCHOU_DELAY_SOURCES})
 target_include_directories(DelaySelfTest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_compile_definitions(DelaySelfTest PRIVATE
-    JucePlugin_Name="chouchouDelay" JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
+    JucePlugin_Name="chouchouDelay"
+    JucePlugin_Manufacturer="chouchou"
+    JucePlugin_PluginCode=0x63446c79
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=1 JUCE_PLUGINHOST_VST=0)
 target_link_libraries(DelaySelfTest PRIVATE
     juce::juce_audio_utils juce::juce_dsp
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
 juce_add_console_app(DelayEditorSnapshot PRODUCT_NAME "DelayEditorSnapshot")
 juce_generate_juce_header(DelayEditorSnapshot)
-target_sources(DelayEditorSnapshot PRIVATE Tools/EditorSnapshot/main.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
+target_sources(DelayEditorSnapshot PRIVATE Tools/EditorSnapshot/main.cpp ${CHOUCHOU_DELAY_SOURCES})
 target_include_directories(DelayEditorSnapshot PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 target_compile_definitions(DelayEditorSnapshot PRIVATE
-    JucePlugin_Name="chouchouDelay" JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
+    JucePlugin_Name="chouchouDelay"
+    JucePlugin_Manufacturer="chouchou"
+    JucePlugin_PluginCode=0x63446c79
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=1 JUCE_PLUGINHOST_VST=0)
 target_link_libraries(DelayEditorSnapshot PRIVATE
     juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

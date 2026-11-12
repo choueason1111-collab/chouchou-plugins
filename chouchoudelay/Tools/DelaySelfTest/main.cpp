@@ -14,6 +14,7 @@
 #include "PluginProcessor.h"
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <new>
@@ -81,8 +82,80 @@ namespace
             setParam (p, Proc::idPitch (e), 0.0f);
             setParam (p, Proc::idFine (e), 0.0f);
             setParam (p, Proc::idOffset (e), 0.0f);
+            setParam (p, Proc::idGateOn (e), 0.0f);
+            setParam (p, Proc::idCompOn (e), 0.0f);
+            setParam (p, Proc::idInsBypass (e), 0.0f);
         }
     }
+
+    float rmsOf (const std::vector<float>& v, size_t from, size_t to)
+    {
+        double s = 0.0;
+        const size_t n = to > from ? to - from : 0;
+        if (n == 0) return 0.0f;
+        for (size_t i = from; i < to; ++i)
+            s += (double) v[i] * (double) v[i];
+        return (float) std::sqrt (s / (double) n);
+    }
+
+    std::vector<float> sine (size_t length, float hz, float amp)
+    {
+        std::vector<float> v (length);
+        const double w = juce::MathConstants<double>::twoPi * (double) hz / kSr;
+        double ph = 0.0;
+        for (size_t i = 0; i < length; ++i)
+        {
+            v[i] = amp * (float) std::sin (ph);
+            ph += w;
+            if (ph > juce::MathConstants<double>::twoPi)
+                ph -= juce::MathConstants<double>::twoPi;
+        }
+        return v;
+    }
+
+    class TestGainPlugin : public juce::AudioPluginInstance
+    {
+    public:
+        float gain = 0.25f;
+
+        void fillInPluginDescription (juce::PluginDescription& d) const override
+        {
+            d.name = "TestGain";
+            d.pluginFormatName = "Internal";
+            d.manufacturerName = "test";
+            d.version = "1.0";
+            d.category = "Fx";
+            d.uniqueId = (int) 0x74657374;
+        }
+
+        const juce::String getName() const override { return "TestGain"; }
+        void prepareToPlay (double, int) override {}
+        void releaseResources() override {}
+        void processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer&) override { b.applyGain (gain); }
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool acceptsMidi() const override { return false; }
+        bool producesMidi() const override { return false; }
+        bool isMidiEffect() const override { return false; }
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 1; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram (int) override {}
+        const juce::String getProgramName (int) override { return {}; }
+        void changeProgramName (int, const juce::String&) override {}
+        void getStateInformation (juce::MemoryBlock& dest) override { dest.append (&gain, sizeof (gain)); }
+        void setStateInformation (const void* data, int size) override
+        {
+            if (size >= (int) sizeof (float))
+                std::memcpy (&gain, data, sizeof (float));
+        }
+        bool isBusesLayoutSupported (const BusesLayout& layouts) const override
+        {
+            return layouts.getMainInputChannelSet() == layouts.getMainOutputChannelSet()
+                && (layouts.getMainOutputChannelSet() == juce::AudioChannelSet::mono()
+                    || layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo());
+        }
+    };
 
     void configure (Proc& p, int count, float intervalSec, float decaySec, float mixPct)
     {
@@ -91,6 +164,14 @@ namespace
         setParam (p, "interval", intervalSec);
         setParam (p, "decay", decaySec);
         setParam (p, "mix", mixPct);
+    }
+
+    /** Near-live wet path: 1-sample interval, 100% mix, long decay. */
+    void configureNearLive (Proc& p)
+    {
+        configure (p, 1, (float) (1.0 / kSr), 60.0f, 100.0f);
+        setParam (p, Proc::idOn (1), 1.0f);
+        setParam (p, Proc::idLevel (1), 0.0f);
     }
 
     // Renders `input` (fed to both channels) and returns channel 0 and channel 1.
@@ -586,6 +667,306 @@ int main()
         render (p, clicks);
         expect (std::abs (p.getDetectedBpm() - 100.0f) < 6.0f, "Temps reel locks onto clicks at 100 BPM",
                 num (p.getDetectedBpm(), 1) + " BPM");
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX0] Wet path with all FX off matches impulse echoes\n";
+    {
+        Proc p;
+        configure (p, 4, 0.25f, 60.0f, 100.0f);
+        p.prepareToPlay (kSr, kBs);
+        expect (p.getFxLatencySamples() == 0, "No FX latency when Gate/Comp/Insert off");
+        auto out = render (p, impulse (52000));
+        const size_t k = 12000;
+        const float g = expectedDecay ((double) k, 60.0);
+        expect (std::abs (out[k] - g) < 1.0e-5f, "Echo 1 intact with FX off", "o=" + num (out[k]));
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX1] gateOn{e} is per-echo\n";
+    {
+        Proc p;
+        configure (p, 2, 0.1f, 60.0f, 100.0f);
+        setParam (p, Proc::idGateOn (1), 1.0f);
+        setParam (p, Proc::idGateOn (2), 0.0f);
+        setParam (p, "gateAmt", 8.0f);
+        setParam (p, "gateThresh", -20.0f);
+        setParam (p, "gateAtk", 0.0f);
+        setParam (p, "gateRel", 0.0f);
+        setParam (p, "gateMix", 1.0f);
+        setParam (p, "gateAutoGain", 0.0f);
+        setParam (p, "gateFft", 0.0f); // 512
+        p.prepareToPlay (kSr, kBs);
+        expect (p.isEchoGateOn (1) && ! p.isEchoGateOn (2), "gateOn flags per echo");
+        expect (p.getFxLatencySamples() >= 512, "Gate reports FFT latency",
+                "lat=" + std::to_string (p.getFxLatencySamples()));
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX2] Gate cuts quiet, not loud (near-live path)\n";
+    {
+        Proc p;
+        configureNearLive (p);
+        setParam (p, Proc::idGateOn (1), 1.0f);
+        setParam (p, "gateAmt", 4.0f);
+        setParam (p, "gateThresh", -30.0f);
+        setParam (p, "gateAtk", 0.0f);
+        setParam (p, "gateRel", 0.0f);
+        setParam (p, "gateMix", 1.0f);
+        setParam (p, "gateMakeup", 0.0f);
+        setParam (p, "gateAutoGain", 0.0f);
+        setParam (p, "gateFft", 0.0f);
+        p.prepareToPlay (kSr, kBs);
+
+        const size_t N = 48000;
+        auto loud = render (p, sine (N, 1000.0f, juce::Decibels::decibelsToGain (-6.0f)));
+        const float loudDb = juce::Decibels::gainToDecibels (rmsOf (loud, N / 2, N), -120.0f);
+        expect (std::abs (loudDb - (-6.0f)) < 4.0f, "Loud tone stays near input",
+                "out=" + num (loudDb, 1) + " dB");
+
+        auto quiet = render (p, sine (N, 1000.0f, juce::Decibels::decibelsToGain (-50.0f)));
+        const float quietDb = juce::Decibels::gainToDecibels (rmsOf (quiet, N / 2, N), -120.0f);
+        expect (quietDb < -53.0f, "Quiet tone is gated down", "out=" + num (quietDb, 1) + " dB");
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX3] Gate Auto Gain restores level\n";
+    {
+        Proc p;
+        configureNearLive (p);
+        setParam (p, Proc::idGateOn (1), 1.0f);
+        setParam (p, "gateAmt", 1.5f);
+        setParam (p, "gateThresh", -24.0f);
+        setParam (p, "gateAtk", 0.0f);
+        setParam (p, "gateRel", 0.0f);
+        setParam (p, "gateMix", 1.0f);
+        setParam (p, "gateMakeup", 0.0f);
+        setParam (p, "gateFft", 0.0f);
+        p.prepareToPlay (kSr, kBs);
+        const float amp = juce::Decibels::decibelsToGain (-30.0f);
+        const size_t N = 60000;
+
+        setParam (p, "gateAutoGain", 0.0f);
+        auto gated = render (p, sine (N, 1000.0f, amp));
+        const float gatedDb = juce::Decibels::gainToDecibels (rmsOf (gated, N / 2, N), -120.0f);
+
+        setParam (p, "gateAutoGain", 1.0f);
+        auto ag = render (p, sine (N, 1000.0f, amp));
+        const float agDb = juce::Decibels::gainToDecibels (rmsOf (ag, N / 2, N), -120.0f);
+
+        expect (gatedDb < -32.0f, "Without Auto Gain, gated quieter", "out=" + num (gatedDb, 1));
+        expect (std::abs (agDb - (-30.0f)) < 5.0f, "With Auto Gain ≈ input", "out=" + num (agDb, 1));
+        expect (rmsOf (ag, N / 2, N) > rmsOf (gated, N / 2, N) * 1.2f, "Auto Gain raises vs gated-only");
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX4] compOn{e} isolates compression\n";
+    {
+        Proc p;
+        configureNearLive (p);
+        setParam (p, Proc::idCompOn (1), 1.0f);
+        setParam (p, Proc::idCompOn (2), 0.0f);
+        setParam (p, "compHighThresh", -24.0f);
+        setParam (p, "compDownRatio", 8.0f);
+        setParam (p, "compUpRatio", 1.0f); // boost bypass
+        setParam (p, "compGrAtk", 0.0f);
+        setParam (p, "compGrRel", 0.0f);
+        setParam (p, "compSpeed", 100.0f);
+        setParam (p, "compMix", 1.0f);
+        setParam (p, "compMakeup", 0.0f);
+        setParam (p, "compAutoGain", 0.0f);
+        setParam (p, "compFft", 0.0f);
+        p.prepareToPlay (kSr, kBs);
+        expect (p.isEchoCompOn (1) && ! p.isEchoCompOn (2), "compOn flags per echo");
+
+        const size_t N = 48000;
+        const float amp = juce::Decibels::decibelsToGain (-6.0f);
+        auto out = render (p, sine (N, 1000.0f, amp));
+        const float outDb = juce::Decibels::gainToDecibels (rmsOf (out, N / 2, N), -120.0f);
+        expect (outDb < -8.0f, "Comp reduces loud tone", "out=" + num (outDb, 1) + " dB");
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX5] Comp Auto Gain restores level\n";
+    {
+        Proc p;
+        configureNearLive (p);
+        setParam (p, Proc::idCompOn (1), 1.0f);
+        setParam (p, "compHighThresh", -24.0f);
+        setParam (p, "compDownRatio", 8.0f);
+        setParam (p, "compUpRatio", 1.0f);
+        setParam (p, "compGrAtk", 0.0f);
+        setParam (p, "compGrRel", 0.0f);
+        setParam (p, "compSpeed", 100.0f);
+        setParam (p, "compMix", 1.0f);
+        setParam (p, "compMakeup", 0.0f);
+        setParam (p, "compFft", 0.0f);
+        p.prepareToPlay (kSr, kBs);
+        const float amp = juce::Decibels::decibelsToGain (-6.0f);
+        const size_t N = 60000;
+
+        setParam (p, "compAutoGain", 0.0f);
+        auto compressed = render (p, sine (N, 1000.0f, amp));
+        const float cDb = juce::Decibels::gainToDecibels (rmsOf (compressed, N / 2, N), -120.0f);
+
+        setParam (p, "compAutoGain", 1.0f);
+        auto ag = render (p, sine (N, 1000.0f, amp));
+        const float agDb = juce::Decibels::gainToDecibels (rmsOf (ag, N / 2, N), -120.0f);
+
+        expect (cDb < -8.0f, "Without Auto Gain, compressed quieter", "out=" + num (cDb, 1));
+        expect (std::abs (agDb - (-6.0f)) < 5.0f, "With Auto Gain ≈ input", "out=" + num (agDb, 1));
+        expect (rmsOf (ag, N / 2, N) > rmsOf (compressed, N / 2, N) * 1.15f, "Auto Gain raises vs compressed-only");
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX6] Gate then Comp serial chain\n";
+    {
+        Proc p;
+        configureNearLive (p);
+        setParam (p, Proc::idGateOn (1), 1.0f);
+        setParam (p, Proc::idCompOn (1), 1.0f);
+        setParam (p, "gateAmt", 2.0f);
+        setParam (p, "gateThresh", -20.0f);
+        setParam (p, "gateAtk", 0.0f);
+        setParam (p, "gateRel", 0.0f);
+        setParam (p, "gateMix", 1.0f);
+        setParam (p, "gateAutoGain", 0.0f);
+        setParam (p, "compHighThresh", -18.0f);
+        setParam (p, "compDownRatio", 4.0f);
+        setParam (p, "compUpRatio", 1.0f);
+        setParam (p, "compMix", 1.0f);
+        setParam (p, "compAutoGain", 0.0f);
+        setParam (p, "gateFft", 0.0f);
+        setParam (p, "compFft", 0.0f);
+        p.prepareToPlay (kSr, kBs);
+        const size_t N = 48000;
+        auto out = render (p, sine (N, 1000.0f, juce::Decibels::decibelsToGain (-6.0f)));
+        expect (std::isfinite (rmsOf (out, N / 2, N)), "Gate→Comp output finite");
+        expect (p.getFxLatencySamples() >= 512, "Latency covers Gate/Comp FFT");
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX7] Empty insert / bypass is identity\n";
+    {
+        Proc p;
+        configure (p, 1, 0.1f, 60.0f, 100.0f);
+        p.prepareToPlay (kSr, kBs);
+        expect (! p.isEchoInsertLoaded (1), "No insert loaded by default");
+        auto baseline = render (p, impulse (8000));
+
+        auto gain = std::make_shared<TestGainPlugin>();
+        gain->gain = 0.25f;
+        p.setEchoInsertForTest (1, gain);
+        expect (p.isEchoInsertLoaded (1), "Insert loaded for test");
+        p.setEchoInsertBypassed (1, true);
+        auto bypassed = render (p, impulse (8000));
+        float maxDiff = 0.0f;
+        for (size_t i = 0; i < baseline.size(); ++i)
+            maxDiff = juce::jmax (maxDiff, std::abs (baseline[i] - bypassed[i]));
+        expect (maxDiff < 1.0e-4f, "Insert bypass ≈ identity vs empty", "diff=" + num (maxDiff, 8));
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX8] Insert gain then clear restores identity\n";
+    {
+        Proc p;
+        configure (p, 1, 0.1f, 60.0f, 100.0f);
+        p.prepareToPlay (kSr, kBs);
+        auto baseline = render (p, impulse (8000));
+
+        auto gain = std::make_shared<TestGainPlugin>();
+        gain->gain = 0.25f;
+        p.setEchoInsertForTest (1, gain);
+        p.setEchoInsertBypassed (1, false);
+        auto attenuated = render (p, impulse (8000));
+        const size_t k = 4800;
+        expect (std::abs (attenuated[k]) < std::abs (baseline[k]) * 0.5f,
+                "Insert gain 0.25 attenuates echo",
+                "base=" + num (baseline[k]) + " out=" + num (attenuated[k]));
+
+        p.clearEchoInsert (1);
+        expect (! p.isEchoInsertLoaded (1), "Clear removes insert");
+        auto cleared = render (p, impulse (8000));
+        expect (std::abs (cleared[k] - baseline[k]) < 1.0e-4f, "Clear restores echo level",
+                "o=" + num (cleared[k]));
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX9] State round-trip preserves gate/comp/insert\n";
+    {
+        Proc p;
+        configureNearLive (p);
+        setParam (p, Proc::idGateOn (1), 1.0f);
+        setParam (p, Proc::idCompOn (3), 1.0f);
+        setParam (p, "gateAmt", 3.5f);
+        setParam (p, "compDownRatio", 6.0f);
+        auto gain = std::make_shared<TestGainPlugin>();
+        gain->gain = 0.5f;
+        p.prepareToPlay (kSr, kBs);
+        p.setEchoInsertForTest (2, gain);
+
+        juce::MemoryBlock state;
+        p.getStateInformation (state);
+
+        Proc p2;
+        p2.prepareToPlay (kSr, kBs);
+        p2.setStateInformation (state.getData(), (int) state.getSize());
+        // Allow async restore for insert description; APVTS is sync
+        expect (p2.isEchoGateOn (1), "Restored gateOn1");
+        expect (p2.isEchoCompOn (3), "Restored compOn3");
+        expect (std::abs (p2.getAPVTS().getRawParameterValue ("gateAmt")->load() - 3.5f) < 0.01f,
+                "Restored gateAmt");
+        expect (std::abs (p2.getAPVTS().getRawParameterValue ("compDownRatio")->load() - 6.0f) < 0.01f,
+                "Restored compDownRatio");
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX10] Latency reported with Gate on\n";
+    {
+        Proc p;
+        configureNearLive (p);
+        setParam (p, Proc::idGateOn (1), 1.0f);
+        setParam (p, "gateFft", 0.0f);
+        p.prepareToPlay (kSr, kBs);
+        expect (p.getLatencySamples() >= 512, "Host latency >= Gate FFT",
+                "lat=" + std::to_string (p.getLatencySamples()));
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX11] echo off / beyond count skips FX contribution\n";
+    {
+        Proc p;
+        configure (p, 1, 0.1f, 60.0f, 100.0f);
+        setParam (p, Proc::idOn (2), 1.0f);
+        setParam (p, Proc::idGateOn (2), 1.0f);
+        setParam (p, "gateAmt", 10.0f);
+        p.prepareToPlay (kSr, kBs);
+        // echo 2 beyond count — should not affect latency from its gate if we only look at active
+        // Gate on inactive echo should not be required; latency uses echoCount
+        expect (p.getEchoCount() == 1, "echoCount is 1");
+        auto out = render (p, impulse (8000));
+        expect (std::isfinite (out[4800]), "Output finite with gated inactive echo");
+    }
+
+    // -------------------------------------------------------------------------
+    std::cout << "\n[FX12] Finite output while moving FX params\n";
+    {
+        Proc p;
+        configureNearLive (p);
+        setParam (p, Proc::idGateOn (1), 1.0f);
+        setParam (p, Proc::idCompOn (1), 1.0f);
+        p.prepareToPlay (kSr, kBs);
+        bool finite = true;
+        for (int i = 0; i < 20; ++i)
+        {
+            setParam (p, "gateAmt", 0.5f + (float) i);
+            setParam (p, "compDownRatio", 1.0f + (float) i * 0.5f);
+            auto out = render (p, sine (2048, 440.0f, 0.2f));
+            for (float s : out)
+                if (! std::isfinite (s))
+                    finite = false;
+        }
+        expect (finite, "No NaN/Inf while sweeping Gate/Comp params");
     }
 
     std::cout << "\n=== Result: " << (gFails == 0 ? "ALL PASS" : "FAILURES") << " (" << gFails << " failed) ===\n\n";

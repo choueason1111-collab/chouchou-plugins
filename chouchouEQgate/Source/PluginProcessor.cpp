@@ -1,7 +1,7 @@
 /*
   ==============================================================================
 
-    ChouChou EQ Gate — spectral expander
+    ChouChou EQ Gate — spectral gate
 
   ==============================================================================
 */
@@ -15,6 +15,9 @@ namespace
     constexpr float kGainFloor = 1.0e-4f;
     constexpr float kGainCeil  = 32.0f;
     constexpr float kColaNorm  = 2.0f / 3.0f; // Hann + hop N/4
+    // Same spectral full-scale as chouchouCompressor — maps dBFS threshold
+    // onto JUCE real-only FFT bin magnitudes (≈ N/4 for a 0 dBFS sine).
+    constexpr float kSpectralFullScale = 512.0f;
 }
 
 //==============================================================================
@@ -43,12 +46,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NewProjectAudioProcessor::cr
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "threshold", 5 }, "Threshold",
         juce::NormalisableRange<float> { -120.0f, 12.0f, 0.1f }, -40.0f,
-        juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
-    params.push_back (std::make_unique<juce::AudioParameterChoice> (
-        juce::ParameterID { "mode", 5 }, "Mode",
-        juce::StringArray { "Expand", "Gate" },
-        0));
+        juce::AudioParameterFloatAttributes().withLabel ("dBFS")));
 
     // 0 ms = instant (coeff = 1). Skew keeps fine control near zero.
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
@@ -69,6 +67,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout NewProjectAudioProcessor::cr
         juce::ParameterID { "makeup", 5 }, "Makeup",
         juce::NormalisableRange<float> { -24.0f, 24.0f, 0.1f }, 0.0f,
         juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "autoGain", 6 }, "Auto Gain", false));
 
     // Smaller FFT = faster hop = shorter usable attack/release
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
@@ -174,6 +175,7 @@ void NewProjectAudioProcessor::resetChannel (ChannelState& ch)
     ch.outFifo.assign ((size_t) hopSize, 0.0f);
     ch.fftData.assign ((size_t) fftSize * 2, 0.0f);
     ch.smoothedMag.assign ((size_t) (fftSize / 2 + 1), 0.0f);
+    ch.dryDelay.assign ((size_t) fftSize, 0.0f);
     ch.window.resize ((size_t) fftSize);
 
     for (int i = 0; i < fftSize; ++i)
@@ -183,6 +185,7 @@ void NewProjectAudioProcessor::resetChannel (ChannelState& ch)
     ch.writePos = 0;
     ch.outRead = 0;
     ch.outAvailable = 0;
+    ch.dryWrite = 0;
 }
 
 void NewProjectAudioProcessor::applyFftSizeFromParameter (bool forceRebuild)
@@ -197,12 +200,16 @@ void NewProjectAudioProcessor::applyFftSizeFromParameter (bool forceRebuild)
 
     for (auto& ch : channels)
         resetChannel (ch);
+
+    inPower = wetPower = 1.0e-8f;
 }
 
 void NewProjectAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate;
     preparedBlockSize = samplesPerBlock;
+    agCoeff = 1.0f - std::exp (-1.0f / (0.03f * (float) juce::jmax (1.0, currentSampleRate)));
+    inPower = wetPower = 1.0e-8f;
 
     const int numChannels = juce::jmax (1, juce::jmax (getTotalNumInputChannels(),
                                                        getTotalNumOutputChannels()));
@@ -240,8 +247,7 @@ void NewProjectAudioProcessor::processHop (ChannelState& ch,
                                            float mix,
                                            float makeupLin,
                                            float attackCoeff,
-                                           float releaseCoeff,
-                                           int mode)
+                                           float releaseCoeff)
 {
     if (fft == nullptr)
         return;
@@ -253,9 +259,8 @@ void NewProjectAudioProcessor::processHop (ChannelState& ch,
     fft->performRealOnlyForwardTransform (ch.fftData.data(), true);
 
     const int numBins = fftSize / 2;
-    const bool gateOnly = (mode == 1); // Gate: only weaken below threshold
 
-    auto expandBin = [&] (int magIndex, float& re, float& im)
+    auto gateBin = [&] (int magIndex, float& re, float& im)
     {
         const float mag = std::sqrt (re * re + im * im);
         float& env = ch.smoothedMag[(size_t) magIndex];
@@ -263,12 +268,8 @@ void NewProjectAudioProcessor::processHop (ChannelState& ch,
         env += coeff * (mag - env);
 
         const float relative = env / (thresholdLin + kEps);
-        float gain = std::pow (juce::jmax (relative, kEps), amount);
-
-        // Gate mode: never boost above unity — only cut weak bins
-        if (gateOnly)
-            gain = juce::jmin (gain, 1.0f);
-
+        // Gate only: never boost above unity — only cut weak bins
+        float gain = juce::jmin (std::pow (juce::jmax (relative, kEps), amount), 1.0f);
         gain = juce::jlimit (kGainFloor, kGainCeil, gain);
         gain = (1.0f - mix) + mix * gain;
         gain *= makeupLin;
@@ -279,12 +280,12 @@ void NewProjectAudioProcessor::processHop (ChannelState& ch,
 
     {
         float re = ch.fftData[0], im = 0.0f;
-        expandBin (0, re, im);
+        gateBin (0, re, im);
         ch.fftData[0] = re;
     }
     {
         float re = ch.fftData[1], im = 0.0f;
-        expandBin (numBins, re, im);
+        gateBin (numBins, re, im);
         ch.fftData[1] = re;
     }
 
@@ -293,7 +294,7 @@ void NewProjectAudioProcessor::processHop (ChannelState& ch,
         const int reIndex = 2 * bin;
         float re = ch.fftData[(size_t) reIndex];
         float im = ch.fftData[(size_t) (reIndex + 1)];
-        expandBin (bin, re, im);
+        gateBin (bin, re, im);
         ch.fftData[(size_t) reIndex]       = re;
         ch.fftData[(size_t) (reIndex + 1)] = im;
     }
@@ -334,12 +335,12 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     const float amount       = apvts.getRawParameterValue ("amt")->load();
     const float thresholdDb  = apvts.getRawParameterValue ("threshold")->load();
-    const int   mode         = (int) apvts.getRawParameterValue ("mode")->load();
     const float attackMs     = apvts.getRawParameterValue ("attack")->load();
     const float releaseMs    = apvts.getRawParameterValue ("release")->load();
     const float mix          = apvts.getRawParameterValue ("mix")->load();
     const float makeupDb     = apvts.getRawParameterValue ("makeup")->load();
-    const float thresholdLin = juce::Decibels::decibelsToGain (thresholdDb);
+    const bool  autoGain     = apvts.getRawParameterValue ("autoGain")->load() > 0.5f;
+    const float thresholdLin = juce::Decibels::decibelsToGain (thresholdDb) * kSpectralFullScale;
     const float makeupLin    = juce::Decibels::decibelsToGain (makeupDb);
 
     const float hopSeconds   = (float) hopSize / (float) juce::jmax (1.0, currentSampleRate);
@@ -349,31 +350,64 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const int numSamples = buffer.getNumSamples();
     const int numCh = juce::jmin (totalNumInputChannels, (int) channels.size());
 
-    for (int channel = 0; channel < numCh; ++channel)
-    {
-        auto& ch = channels[(size_t) channel];
-        auto* data = buffer.getWritePointer (channel);
+    constexpr int kMaxCh = 8;
+    float dryS[kMaxCh] {}, wetS[kMaxCh] {};
+    const int linkedCh = juce::jmin (numCh, kMaxCh);
 
-        for (int i = 0; i < numSamples; ++i)
+    for (int i = 0; i < numSamples; ++i)
+    {
+        for (int channel = 0; channel < linkedCh; ++channel)
         {
-            ch.inputFifo[(size_t) ch.writePos] = data[i];
+            auto& ch = channels[(size_t) channel];
+            auto* data = buffer.getWritePointer (channel);
+            const float dryIn = data[i];
+
+            const float delayedDry = ch.dryDelay[(size_t) ch.dryWrite];
+            ch.dryDelay[(size_t) ch.dryWrite] = dryIn;
+            ch.dryWrite = (ch.dryWrite + 1) % fftSize;
+
+            ch.inputFifo[(size_t) ch.writePos] = dryIn;
             ++ch.writePos;
 
-            float out = 0.0f;
-
+            float wet = 0.0f;
             if (ch.outAvailable > 0)
             {
-                out = ch.outFifo[(size_t) ch.outRead];
+                wet = ch.outFifo[(size_t) ch.outRead];
                 ++ch.outRead;
                 --ch.outAvailable;
             }
 
-            data[i] = out;
+            dryS[channel] = delayedDry;
+            wetS[channel] = wet;
 
             if (ch.writePos == fftSize)
                 processHop (ch, amount, thresholdLin, mix, makeupLin,
-                            attackCoeff, releaseCoeff, mode);
+                            attackCoeff, releaseCoeff);
         }
+
+        if (autoGain)
+        {
+            float ip = 0.0f, wp = 0.0f;
+            for (int ch = 0; ch < linkedCh; ++ch)
+            {
+                ip += dryS[ch] * dryS[ch];
+                wp += wetS[ch] * wetS[ch];
+            }
+            const float inv = 1.0f / (float) juce::jmax (1, linkedCh);
+            inPower += agCoeff * (ip * inv - inPower);
+            wetPower += agCoeff * (wp * inv - wetPower);
+            float g = 1.0f;
+            if (inPower > 1.0e-8f || wetPower > 1.0e-8f)
+                g = std::sqrt (inPower / juce::jmax (wetPower, 1.0e-12f));
+            g = juce::jlimit (0.03f, 30.0f, g);
+            for (int ch = 0; ch < linkedCh; ++ch)
+                wetS[ch] *= g;
+        }
+        else
+            inPower = wetPower = 1.0e-8f;
+
+        for (int channel = 0; channel < linkedCh; ++channel)
+            buffer.getWritePointer (channel)[i] = wetS[channel];
     }
 }
 

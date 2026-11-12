@@ -1,8 +1,8 @@
 /*
   ==============================================================================
 
-    ChouChou EQ Gate — spectral expander
-    Strong bins get stronger; weak bins get weaker.
+    ChouChou EQ Gate — spectral gate
+    Weak bins are attenuated; strong bins stay at unity (no expand).
 
   ==============================================================================
 */
@@ -79,9 +79,11 @@ private:
         std::vector<float> fftData;
         std::vector<float> window;
         std::vector<float> smoothedMag;
+        std::vector<float> dryDelay;
         int writePos = 0;
         int outRead = 0;
         int outAvailable = 0;
+        int dryWrite = 0;
     };
 
     void applyFftSizeFromParameter (bool forceRebuild);
@@ -93,8 +95,7 @@ private:
                      float mix,
                      float makeupLin,
                      float attackCoeff,
-                     float releaseCoeff,
-                     int mode);
+                     float releaseCoeff);
 
     static float timeMsToCoeff (float timeMs, float hopSeconds) noexcept;
     static int fftSizeChoiceToOrder (int choiceIndex) noexcept;
@@ -108,6 +109,10 @@ private:
     int hopSize  = (1 << kDefaultFftOrder) / 4;
     double currentSampleRate = 44100.0;
     int preparedBlockSize = 512;
+
+    float agCoeff = 0.01f;
+    float inPower = 1.0e-8f;
+    float wetPower = 1.0e-8f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewProjectAudioProcessor)
 };

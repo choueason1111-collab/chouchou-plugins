@@ -43,6 +43,11 @@ private:
     void showPage (int page);
     void updateFftCode();
     void paintFftCode (juce::Graphics& g);
+    void applyUltrasoundView();
+    void applyDisplayRange (float minHz, float maxHz, bool linearScale);
+    float displayNyquist() const noexcept;
+    float clampEditableHz (float hz) const noexcept;
+    void updateUltraReadout();
 
     ChouchouFFTEQAudioProcessor& audioProcessor;
     juce::AudioProcessorValueTreeState& apvts;
@@ -57,8 +62,8 @@ private:
     float dragStartY = 0.0f;
     juce::Rectangle<int> spectrumArea, fftCodeArea;
     juce::String fftFormula;
-    juce::ToggleButton eqOn, autoGain, scMatch, scFollow, scCapture, freeze, scUseBands;
-    juce::TextButton fftOn { "FFT" };
+    juce::ToggleButton eqOn, autoGain, usOn, scMatch, scFollow, freeze, scUseBands;
+    juce::TextButton fftOn { "FFT" }, scCapture { "Capture" };
     juce::Slider mix, scAmount, scBandN;
     juce::Label scBandCaption;
     juce::ComboBox scMode, fftSize, eqEngine, experimentBox;
@@ -66,6 +71,22 @@ private:
     juce::TextButton removeBand { "Remove" };
     juce::Viewport bandViewport;
     juce::Component bandHolder;
+
+    struct UltraKnob
+    {
+        juce::Slider slider;
+        juce::Label name;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
+    };
+    std::array<UltraKnob, 4> ultraKnobs;
+    UltraKnob ultraMin, ultraMax;
+    juce::ToggleButton usSolo { "Solo" };
+    juce::ToggleButton ultraLinear { "Linear" };
+    juce::Label ultraHint, ultraRangeCaption, ultraDspCaption;
+    juce::TextButton rangeAudible { "20-20k" }, range1to60 { "1-60k" }, rangeFull { "Full" };
+    juce::TextButton floor18 { "Floor 18k" }, floor20 { "Floor 20k" }, floor30 { "Floor 30k" };
+    juce::TextButton ultraAddBand { "Add band" }, ultraRemoveBand { "Remove" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> usAtt, usSoloAtt;
 
     struct BandRow
     {
@@ -88,7 +109,7 @@ private:
     };
     std::array<Knob, 12> knobs;
 
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> eqAtt, fftAtt, agAtt, matchAtt, followAtt, capAtt, freezeAtt, scUseBandsAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> eqAtt, fftAtt, agAtt, matchAtt, followAtt, freezeAtt, scUseBandsAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mixAtt, amountAtt, scBandAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> scModeAtt, fftSizeAtt, engineAtt, experimentAtt;
 
@@ -98,8 +119,9 @@ private:
     std::vector<float> refCurve, slotA, slotB, corrHistory;
     AnalyserControls analyserUi;
     PhaseControls phaseUi;
-    juce::TextButton pageEq { "EQ" }, pageSpec { "Spectrum" }, pagePhase { "Phase" };
+    juce::TextButton pageEq { "EQ" }, pageSpec { "Spectrum" }, pagePhase { "Phase" }, pageUltra { "Ultra" };
     int viewPage = 0;
+    bool lastUsOn = false;
     int timerHz = 30;
     DisplayAnalyser::Frame anFrame;
     PhaseCapture::Frame phFrame;

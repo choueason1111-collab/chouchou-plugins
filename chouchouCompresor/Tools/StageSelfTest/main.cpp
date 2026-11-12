@@ -488,13 +488,32 @@ int main()
 
     proc.releaseResources();
 
-    std::cout << "\n[I] Ten frequency tessituras and waveform\n";
+    std::cout << "\n[I] Separate expand/compress tessituras (1 Hz-96 kHz) and waveform\n";
     {
         auto setAllTess = [] (NewProjectAudioProcessor& p, bool on)
         {
             for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
-                setParam (p, ("tess" + std::to_string (i)).c_str(), on ? 1.0f : 0.0f);
+            {
+                setParam (p, ("tessExp" + std::to_string (i)).c_str(), on ? 1.0f : 0.0f);
+                setParam (p, ("tessComp" + std::to_string (i)).c_str(), on ? 1.0f : 0.0f);
+            }
         };
+        auto setAllExp = [] (NewProjectAudioProcessor& p, bool on)
+        {
+            for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
+                setParam (p, ("tessExp" + std::to_string (i)).c_str(), on ? 1.0f : 0.0f);
+        };
+        auto setAllComp = [] (NewProjectAudioProcessor& p, bool on)
+        {
+            for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
+                setParam (p, ("tessComp" + std::to_string (i)).c_str(), on ? 1.0f : 0.0f);
+        };
+
+        expect (proc.getAPVTS().getParameter ("tessExp5") != nullptr
+                    && proc.getAPVTS().getParameter ("tessComp5") != nullptr,
+                "Separate Expand and Compress tessitura parameters exist");
+        expect (proc.getAPVTS().getParameter ("tess0") == nullptr,
+                "Legacy shared tessitura parameters are gone");
 
         setDefaultsForIsolation (proc);
         setParam (proc, "upratio", 1.0f);
@@ -510,29 +529,29 @@ int main()
         setParam (proc, "gratk", 0.0f);
         setParam (proc, "grrel", 0.0f);
         setAllTess (proc, false);
-        setParam (proc, "tess5", 1.0f); // 1-2 kHz, contains 1000 Hz
+        setParam (proc, "tessComp5", 1.0f); // 1-2 kHz, contains 1000 Hz
         proc.reset();
         const float inBandDb = juce::Decibels::gainToDecibels (
             steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96), -120.0f);
 
         setAllTess (proc, false);
-        setParam (proc, "tess0", 1.0f); // 20-60 Hz, does not contain 1000 Hz
+        setParam (proc, "tessComp0", 1.0f); // 1-60 Hz, does not contain 1000 Hz
         proc.reset();
         const float outBandDb = juce::Decibels::gainToDecibels (
             steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96), -120.0f);
 
         expect (inBandDb < bypassDb - 1.5f,
-                "Tessitura 1-2 kHz compresses a 1000 Hz sine",
+                "Compress tessitura 1-2 kHz compresses a 1000 Hz sine",
                 "bypass " + std::to_string (bypassDb) + " in " + std::to_string (inBandDb));
         expect (std::abs (outBandDb - bypassDb) < 2.0f,
-                "A tessitura outside the tone does not compress it",
+                "A compress tessitura outside the tone does not compress it",
                 "bypass " + std::to_string (bypassDb) + " out " + std::to_string (outBandDb));
         expect (proc.getTessituraGrDb (0) < 0.5f,
-                "The unused tessitura reports no reduction",
+                "The unused compress tessitura reports no reduction",
                 "gr " + std::to_string (proc.getTessituraGrDb (0)));
 
         setAllTess (proc, false);
-        setParam (proc, "tess5", 1.0f);
+        setParam (proc, "tessComp5", 1.0f);
         proc.reset();
         (void) steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96);
 
@@ -568,8 +587,48 @@ int main()
                     + " in " + std::to_string (inComp) + " out " + std::to_string (outComp)
                     + " gr " + std::to_string (grPeak));
         expect (proc.getTessituraGrDb (5) > 0.5f,
-                "The selected tessitura reports the reduction",
+                "The selected compress tessitura reports the reduction",
                 "gr " + std::to_string (proc.getTessituraGrDb (5)));
+
+        // Expand-only band: compress row off must not reduce, expand row on must boost.
+        setParam (proc, "downratio", 8.0f);
+        setParam (proc, "highthresh", -18.0f);
+        setParam (proc, "upratio", 8.0f);
+        setParam (proc, "lowthresh", -3.0f);
+        setParam (proc, "boostatk", 0.0f);
+        setParam (proc, "boostrel", 0.0f);
+        setParam (proc, "gratk", 0.0f);
+        setParam (proc, "grrel", 0.0f);
+        setAllExp (proc, false);
+        setAllComp (proc, false);
+        setParam (proc, "tessExp5", 1.0f); // expand 1-2 kHz only
+        proc.reset();
+        (void) steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96);
+        std::vector<float> sepMag, sepGr, sepBoost;
+        proc.copySpectrum (sepMag, sepGr, sepBoost, specSr, specN);
+        expect (proc.getTessituraBoostDb (5) > 0.5f
+                    && proc.getTessituraGrDb (5) < 0.5f
+                    && ! sepBoost.empty()
+                    && sepBoost[(size_t) bin1k] > 0.5f
+                    && (sepGr.empty() || sepGr[(size_t) bin1k] < 0.5f),
+                "Expand tessitura alone expands without compressing",
+                "boost " + std::to_string (proc.getTessituraBoostDb (5))
+                    + " gr " + std::to_string (proc.getTessituraGrDb (5)));
+
+        setAllExp (proc, false);
+        setAllComp (proc, false);
+        setParam (proc, "tessComp5", 1.0f); // compress 1-2 kHz only
+        setParam (proc, "upratio", 1.0f);
+        proc.reset();
+        (void) steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96);
+        proc.copySpectrum (sepMag, sepGr, sepBoost, specSr, specN);
+        expect (proc.getTessituraGrDb (5) > 0.5f
+                    && proc.getTessituraBoostDb (5) < 0.5f
+                    && ! sepGr.empty()
+                    && sepGr[(size_t) bin1k] > 0.5f,
+                "Compress tessitura alone compresses without expanding",
+                "gr " + std::to_string (proc.getTessituraGrDb (5))
+                    + " boost " + std::to_string (proc.getTessituraBoostDb (5)));
 
         setParam (proc, "downratio", 1.0f);
         setParam (proc, "upratio", 8.0f);
@@ -577,7 +636,7 @@ int main()
         setParam (proc, "boostatk", 0.0f);
         setParam (proc, "boostrel", 0.0f);
         setAllTess (proc, false);
-        setParam (proc, "tess5", 1.0f);
+        setParam (proc, "tessExp5", 1.0f);
         proc.reset();
         (void) steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96);
         std::vector<float> expMag, expGr, expBoost;
@@ -590,20 +649,222 @@ int main()
                     && ! expBoost.empty()
                     && expBoost[(size_t) expBin1k] > 0.5f
                     && expBoost[(size_t) expBin8k] < 0.5f,
-                "Tessitura 1-2 kHz expands a 1000 Hz sine and not 8 kHz",
+                "Expand tessitura 1-2 kHz expands a 1000 Hz sine and not 8 kHz",
                 "band " + std::to_string (proc.getTessituraBoostDb (5))
                     + " 1k " + std::to_string (expBoost.empty() ? 0.0f : expBoost[(size_t) expBin1k]));
 
         setAllTess (proc, false);
-        setParam (proc, "tess0", 1.0f);
+        setParam (proc, "tessExp0", 1.0f);
         proc.reset();
         (void) steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96);
         proc.copySpectrum (expMag, expGr, expBoost, specSr, specN);
         expect (proc.getTessituraBoostDb (5) < 0.5f
                     && (expBoost.empty() || expBoost[(size_t) expBin1k] < 0.5f),
-                "A tessitura outside the tone does not expand it",
+                "An expand tessitura outside the tone does not expand it",
                 "band " + std::to_string (proc.getTessituraBoostDb (5))
                     + " 1k " + std::to_string (expBoost.empty() ? 0.0f : expBoost[(size_t) expBin1k]));
+    }
+
+    //--------------------------------------------------------------------------
+    std::cout << "\n[J] Auto Gain matches wet level to dry after compression\n";
+    {
+        expect (proc.getAPVTS().getParameter ("autoGain") != nullptr,
+                "Auto Gain parameter exists");
+
+        // Re-enable every expand/compress tessitura — section [I] may have left only one on.
+        for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
+        {
+            setParam (proc, ("tessExp" + std::to_string (i)).c_str(), 1.0f);
+            setParam (proc, ("tessComp" + std::to_string (i)).c_str(), 1.0f);
+        }
+
+        setDefaultsForIsolation (proc);
+        setParam (proc, "upratio", 1.0f);
+        setParam (proc, "downratio", 12.0f);
+        setParam (proc, "highthresh", -18.0f);
+        setParam (proc, "gratk", 0.0f);
+        setParam (proc, "grrel", 0.0f);
+        setParam (proc, "mix", 1.0f);
+        setParam (proc, "makeup", 0.0f);
+
+        const float amp = juce::Decibels::decibelsToGain (-6.0f);
+
+        setParam (proc, "autoGain", 0.0f);
+        proc.reset();
+        const float compressed = steadyPeak (proc, buf, sr, 1000.0f, amp, 120);
+        const float compressedDb = juce::Decibels::gainToDecibels (compressed, -120.0f);
+
+        setParam (proc, "autoGain", 1.0f);
+        proc.reset();
+        const float ag = steadyPeak (proc, buf, sr, 1000.0f, amp, 200);
+        const float agDb = juce::Decibels::gainToDecibels (ag, -120.0f);
+
+        expect (compressedDb < -6.0f - 1.5f,
+                "Without Auto Gain, compressed tone is quieter",
+                "out=" + juce::String (compressedDb, 1).toStdString() + " dBFS");
+        expect (std::abs (agDb - (-6.0f)) < 3.0f,
+                "With Auto Gain, output ≈ input level",
+                "out=" + juce::String (agDb, 1).toStdString() + " dBFS");
+        expect (ag > compressed * 1.15f,
+                "Auto Gain raises level vs compressed-only",
+                "ag=" + juce::String (agDb, 1).toStdString()
+                    + " comp=" + juce::String (compressedDb, 1).toStdString());
+
+        // Expander still works with Auto Gain off
+        setParam (proc, "autoGain", 0.0f);
+        setParam (proc, "downratio", 1.0f);
+        setParam (proc, "upratio", 8.0f);
+        setParam (proc, "lowthresh", -12.0f);
+        setParam (proc, "boostatk", 0.0f);
+        setParam (proc, "boostrel", 0.0f);
+        proc.reset();
+        const float quiet = juce::Decibels::decibelsToGain (-24.0f);
+        const float boosted = steadyPeak (proc, buf, sr, 1000.0f, quiet, 96);
+        expect (juce::Decibels::gainToDecibels (boosted, -120.0f) > -24.0f + 2.0f,
+                "Expander still raises quiet tone (Auto Gain off)",
+                "out=" + juce::String (juce::Decibels::gainToDecibels (boosted, -120.0f), 1).toStdString()
+                    + " dBFS");
+    }
+
+    //--------------------------------------------------------------------------
+    std::cout << "\n[K] Spectrum axis 1 Hz-96 kHz and extreme tessituras\n";
+    {
+        expect (NewProjectAudioProcessor::kSpectrumMinHz == 1.0f
+                    && NewProjectAudioProcessor::kSpectrumMaxHz == 96000.0f,
+                "Spectrum axis constants are 1 Hz and 96 kHz",
+                "min=" + std::to_string (NewProjectAudioProcessor::kSpectrumMinHz)
+                    + " max=" + std::to_string (NewProjectAudioProcessor::kSpectrumMaxHz));
+
+        auto* expLo = proc.getAPVTS().getParameter ("tessExp0");
+        auto* expHi = proc.getAPVTS().getParameter ("tessExp9");
+        auto* compLo = proc.getAPVTS().getParameter ("tessComp0");
+        auto* compHi = proc.getAPVTS().getParameter ("tessComp9");
+        expect (expLo != nullptr && expHi != nullptr && compLo != nullptr && compHi != nullptr,
+                "Extreme expand/compress tessitura parameters exist");
+        if (expLo != nullptr && expHi != nullptr)
+        {
+            expect (expLo->getName (64).containsIgnoreCase ("1-60")
+                        && expHi->getName (64).containsIgnoreCase ("20-96"),
+                    "Tessitura names cover 1-60 Hz and 20-96 kHz",
+                    "lo=" + expLo->getName (64).toStdString()
+                        + " hi=" + expHi->getName (64).toStdString());
+        }
+
+        // At 48 kHz, only the audible mid band must affect 1 kHz — not the 20-96 kHz row.
+        for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
+        {
+            setParam (proc, ("tessExp" + std::to_string (i)).c_str(), 0.0f);
+            setParam (proc, ("tessComp" + std::to_string (i)).c_str(), 0.0f);
+        }
+        setDefaultsForIsolation (proc);
+        setParam (proc, "upratio", 1.0f);
+        setParam (proc, "downratio", 8.0f);
+        setParam (proc, "highthresh", -18.0f);
+        setParam (proc, "gratk", 0.0f);
+        setParam (proc, "grrel", 0.0f);
+        setParam (proc, "tessComp9", 1.0f); // 20-96 kHz only
+        proc.reset();
+        const float loudAmp = juce::Decibels::decibelsToGain (-6.0f);
+        const float outHiOnly = juce::Decibels::gainToDecibels (
+            steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96), -120.0f);
+        expect (std::abs (outHiOnly - (-6.0f)) < 2.0f
+                    && proc.getTessituraGrDb (9) < 0.5f
+                    && proc.getTessituraGrDb (5) < 0.5f,
+                "At 48 kHz, 20-96 kHz compress band leaves 1 kHz alone",
+                "out=" + juce::String (outHiOnly, 1).toStdString()
+                    + " gr9=" + juce::String (proc.getTessituraGrDb (9), 2).toStdString());
+
+        setParam (proc, "tessComp9", 0.0f);
+        setParam (proc, "tessComp0", 1.0f); // 1-60 Hz only
+        proc.reset();
+        const float outLoOnly = juce::Decibels::gainToDecibels (
+            steadyPeak (proc, buf, sr, 1000.0f, loudAmp, 96), -120.0f);
+        expect (std::abs (outLoOnly - (-6.0f)) < 2.0f,
+                "At 48 kHz, 1-60 Hz compress band leaves 1 kHz alone",
+                "out=" + juce::String (outLoOnly, 1).toStdString());
+
+        // 192 kHz: the 20-96 kHz band can hear a 40 kHz tone.
+        constexpr double srHi = 192000.0;
+        constexpr int blockHi = 512;
+        NewProjectAudioProcessor procHi;
+        procHi.prepareToPlay (srHi, blockHi);
+        procHi.applyFftSizeFromParameterLocked (true);
+        juce::AudioBuffer<float> bufHi (2, blockHi);
+
+        for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
+        {
+            setParam (procHi, ("tessExp" + std::to_string (i)).c_str(), 0.0f);
+            setParam (procHi, ("tessComp" + std::to_string (i)).c_str(), 0.0f);
+        }
+        setDefaultsForIsolation (procHi);
+        setParam (procHi, "upratio", 1.0f);
+        setParam (procHi, "downratio", 1.0f);
+        setParam (procHi, "mix", 1.0f);
+        setParam (procHi, "tessComp9", 1.0f);
+        procHi.reset();
+        const float amp40 = juce::Decibels::decibelsToGain (-6.0f);
+        const float bypass40 = juce::Decibels::gainToDecibels (
+            steadyPeak (procHi, bufHi, srHi, 40000.0f, amp40, 160), -120.0f);
+
+        setParam (procHi, "downratio", 10.0f);
+        setParam (procHi, "highthresh", -18.0f);
+        setParam (procHi, "gratk", 0.0f);
+        setParam (procHi, "grrel", 0.0f);
+        procHi.reset();
+        const float compressed40 = juce::Decibels::gainToDecibels (
+            steadyPeak (procHi, bufHi, srHi, 40000.0f, amp40, 160), -120.0f);
+
+        expect (compressed40 < bypass40 - 1.5f && procHi.getTessituraGrDb (9) > 0.5f,
+                "At 192 kHz, 20-96 kHz band compresses a 40 kHz sine",
+                "bypass=" + juce::String (bypass40, 1).toStdString()
+                    + " out=" + juce::String (compressed40, 1).toStdString()
+                    + " gr9=" + juce::String (procHi.getTessituraGrDb (9), 1).toStdString());
+
+        setParam (procHi, "tessComp9", 0.0f);
+        setParam (procHi, "tessComp5", 1.0f); // 1-2 kHz only
+        procHi.reset();
+        const float midOnly40 = juce::Decibels::gainToDecibels (
+            steadyPeak (procHi, bufHi, srHi, 40000.0f, amp40, 160), -120.0f);
+        expect (std::abs (midOnly40 - bypass40) < 2.5f && procHi.getTessituraGrDb (9) < 0.5f,
+                "At 192 kHz, 1-2 kHz band does not compress 40 kHz",
+                "bypass=" + juce::String (bypass40, 1).toStdString()
+                    + " out=" + juce::String (midOnly40, 1).toStdString());
+
+        std::vector<float> magHi, grHi, boostHi;
+        double pubSr = 0.0;
+        int pubN = 0;
+        procHi.copySpectrum (magHi, grHi, boostHi, pubSr, pubN);
+        const float binHz = pubN > 0 ? (float) pubSr / (float) pubN : 0.0f;
+        const float topBinHz = pubN > 1 ? binHz * (float) (pubN / 2) : 0.0f;
+        expect (std::abs (pubSr - srHi) < 1.0
+                    && topBinHz >= 90000.0f,
+                "At 192 kHz the published spectrum reaches near 96 kHz",
+                "sr=" + juce::String (pubSr, 0).toStdString()
+                    + " topBin=" + juce::String (topBinHz, 0).toStdString() + " Hz");
+
+        // Expand-only on the low band at 48 kHz still works after the high-SR processor.
+        for (int i = 0; i < NewProjectAudioProcessor::kTessituras; ++i)
+        {
+            setParam (proc, ("tessExp" + std::to_string (i)).c_str(), 0.0f);
+            setParam (proc, ("tessComp" + std::to_string (i)).c_str(), 0.0f);
+        }
+        setDefaultsForIsolation (proc);
+        setParam (proc, "downratio", 1.0f);
+        setParam (proc, "upratio", 8.0f);
+        setParam (proc, "lowthresh", -12.0f);
+        setParam (proc, "boostatk", 0.0f);
+        setParam (proc, "boostrel", 0.0f);
+        setParam (proc, "tessExp0", 1.0f); // 1-60 Hz expand only
+        proc.reset();
+        const float subQuiet = juce::Decibels::decibelsToGain (-24.0f);
+        const float subOut = juce::Decibels::gainToDecibels (
+            steadyPeak (proc, buf, sr, 40.0f, subQuiet, 128), -120.0f);
+        expect (subOut > -24.0f + 2.0f && proc.getTessituraBoostDb (0) > 0.5f,
+                "1-60 Hz expand band boosts a 40 Hz quiet sine",
+                "out=" + juce::String (subOut, 1).toStdString()
+                    + " boost0=" + juce::String (proc.getTessituraBoostDb (0), 1).toStdString());
+
+        procHi.releaseResources();
     }
 
     proc.releaseResources();

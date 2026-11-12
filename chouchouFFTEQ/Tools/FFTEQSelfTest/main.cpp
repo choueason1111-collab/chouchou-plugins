@@ -216,12 +216,7 @@ void armEqBand (Rig& r, int index, float freq, float gainDb, bool on = true)
     setParam (r.p, (id + "gain").c_str(), gainDb);
     setParam (r.p, (id + "q").c_str(), 2.0f);
 }
-
-std::vector<float> renderSteady (Rig& r, const std::vector<float>& in)
-{
-    return r.render (in);
-}
-}
+} // namespace
 
 int main()
 {
@@ -541,12 +536,11 @@ int main()
     {
         Rig snap (true);
         setParam (snap.p, "scMode", 1.0f);
-        setParam (snap.p, "scCapture", 1.0f);
         snap.prepare();
         const auto scLow = sine (12000, 1000.0);
         const auto main = sine (12000, 440.0);
+        snap.p->pulseCapture();
         snap.render (main, &scLow);
-        setParam (snap.p, "scCapture", 0.0f);
         const auto scHigh = sine (12000, 3000.0);
         snap.render (main, &scHigh);
         std::vector<float> mainMag, scMag, refMag;
@@ -675,6 +669,114 @@ int main()
                 std::to_string (low) + " -> " + std::to_string (high));
         expect (std::abs (absLow - absHigh) < 80.0, "sans suivi le gabarit reste sur les memes frequences",
                 std::to_string (absLow) + " / " + std::to_string (absHigh));
+    }
+
+    {
+        const auto harm = harmonics (n);
+        const auto sc = sine (n, 800.0, 0.5f);
+
+        Rig bandsNoFft (true);
+        setParam (bandsNoFft.p, "fftOn", 0.0f);
+        setParam (bandsNoFft.p, "scMode", 2.0f);
+        setParam (bandsNoFft.p, "scMatch", 1.0f);
+        setParam (bandsNoFft.p, "scAmount", 1.0f);
+        setParam (bandsNoFft.p, "scUseBands", 1.0f);
+        setParam (bandsNoFft.p, "scBandN", 64.0f);
+        bandsNoFft.prepare();
+        const auto banded = bandsNoFft.render (harm, &sc);
+        const double bandRatio = goertzel (banded, specFrom, specLen, 800.0)
+                                 / std::max (goertzel (banded, specFrom, specLen, 200.0), 1.0e-12);
+
+        Rig plainNoFft;
+        setParam (plainNoFft.p, "fftOn", 0.0f);
+        plainNoFft.prepare();
+        const auto dryNoFft = plainNoFft.render (harm);
+        const double dryRatio = goertzel (dryNoFft, specFrom, specLen, 800.0)
+                                / std::max (goertzel (dryNoFft, specFrom, specLen, 200.0), 1.0e-12);
+        expect (bandRatio > dryRatio * 4.0,
+                "les bandes Sidechain agissent sans case FFT",
+                std::to_string (dryRatio) + " -> " + std::to_string (bandRatio));
+
+        setParam (bandsNoFft.p, "scMatch", 0.0f);
+        const auto afterOff = bandsNoFft.render (harm, &sc);
+        expect (maxAbsDiff (afterOff, dryNoFft, tail) < 0.05,
+                "couper Copy spectrum arrete les bandes tout de suite",
+                "diff " + std::to_string (maxAbsDiff (afterOff, dryNoFft, tail)));
+
+        Rig stick (true);
+        setParam (stick.p, "fftOn", 0.0f);
+        setParam (stick.p, "scMode", 2.0f);
+        setParam (stick.p, "scMatch", 1.0f);
+        setParam (stick.p, "scAmount", 1.0f);
+        setParam (stick.p, "scUseBands", 1.0f);
+        setParam (stick.p, "scBandN", 32.0f);
+        stick.prepare();
+        stick.render (harm, &sc);
+        setParam (stick.p, "scUseBands", 0.0f);
+        setParam (stick.p, "scMatch", 0.0f);
+        const auto cleared = stick.render (harm, &sc);
+        expect (maxAbsDiff (cleared, dryNoFft, tail) < 0.05,
+                "quitter Bandes puis Copy ne laisse aucun filtre IIR",
+                "diff " + std::to_string (maxAbsDiff (cleared, dryNoFft, tail)));
+
+        Rig snapMatch (true);
+        setParam (snapMatch.p, "fftOn", 0.0f);
+        setParam (snapMatch.p, "scMode", 1.0f);
+        setParam (snapMatch.p, "scMatch", 1.0f);
+        setParam (snapMatch.p, "scAmount", 1.0f);
+        setParam (snapMatch.p, "scUseBands", 1.0f);
+        setParam (snapMatch.p, "scBandN", 48.0f);
+        snapMatch.prepare();
+        snapMatch.p->pulseCapture();
+        snapMatch.render (harm, &sc); // Capture lands at the end of this block.
+        const auto captured = snapMatch.render (harm, &sc);
+        const double withCable = goertzel (captured, specFrom, specLen, 800.0)
+                                 / std::max (goertzel (captured, specFrom, specLen, 200.0), 1.0e-12);
+        const auto silentSc = std::vector<float> ((size_t) n, 0.0f);
+        const auto kept = snapMatch.render (harm, &silentSc);
+        const double afterUnplug = goertzel (kept, specFrom, specLen, 800.0)
+                                   / std::max (goertzel (kept, specFrom, specLen, 200.0), 1.0e-12);
+        expect (withCable > dryRatio * 4.0 && afterUnplug > dryRatio * 4.0,
+                "Snapshot garde la limite apres Capture sans Sidechain",
+                std::to_string (withCable) + " / " + std::to_string (afterUnplug));
+
+        setParam (snapMatch.p, "scMode", 0.0f);
+        const auto modeOff = snapMatch.render (harm, &sc);
+        expect (maxAbsDiff (modeOff, dryNoFft, tail) < 0.05,
+                "Sidechain Off annule la limite de frequence",
+                "diff " + std::to_string (maxAbsDiff (modeOff, dryNoFft, tail)));
+
+        Rig shrink (true);
+        setParam (shrink.p, "fftOn", 0.0f);
+        setParam (shrink.p, "scMode", 2.0f);
+        setParam (shrink.p, "scMatch", 1.0f);
+        setParam (shrink.p, "scAmount", 1.0f);
+        setParam (shrink.p, "scUseBands", 1.0f);
+        setParam (shrink.p, "scBandN", 128.0f);
+        shrink.prepare();
+        shrink.render (harm, &sc);
+        setParam (shrink.p, "scBandN", 1.0f);
+        shrink.render (harm, &sc);
+        std::vector<float> drawn;
+        int bands = -1;
+        shrink.p->copyMatch (drawn, bands);
+        expect (bands == 1, "reduire le nombre de bandes Sidechain met a jour l'affichage",
+                "n=" + std::to_string (bands));
+
+        Rig spectralNoFft (true);
+        setParam (spectralNoFft.p, "fftOn", 0.0f);
+        setParam (spectralNoFft.p, "scMode", 2.0f);
+        setParam (spectralNoFft.p, "scMatch", 1.0f);
+        setParam (spectralNoFft.p, "scAmount", 1.0f);
+        setParam (spectralNoFft.p, "scUseBands", 0.0f);
+        spectralNoFft.prepare();
+        spectralNoFft.render (harm, &sc); // First block learns the Sidechain reference.
+        const auto spectral = spectralNoFft.render (harm, &sc);
+        const double spectralRatio = goertzel (spectral, specFrom, specLen, 800.0)
+                                     / std::max (goertzel (spectral, specFrom, specLen, 200.0), 1.0e-12);
+        expect (spectralRatio > dryRatio * 4.0,
+                "la copie spectrale complete marche aussi sans case FFT",
+                std::to_string (dryRatio) + " -> " + std::to_string (spectralRatio));
     }
 
     {
@@ -968,6 +1070,413 @@ int main()
         expect (std::abs (qMode - butter) / std::max (butter, 1.0e-9) > 0.05,
                 "le calcul Q ne sonne pas comme Butterworth",
                 "Q " + std::to_string (qMode) + " Butterworth " + std::to_string (butter));
+    }
+
+    // --- [ULTRA] @ 96 kHz ---
+    {
+        constexpr double kUltraSr = 96000.0;
+        constexpr int kUltraN = 48000;
+        constexpr int kUltraTail = 24000;
+        constexpr int kSpecFrom = 8192;
+        constexpr int kSpecLen = 16384;
+
+        auto goertzelAt = [&] (const std::vector<float>& x, double hz)
+        {
+            const double w = 2.0 * kPi * hz / kUltraSr;
+            const double coeff = 2.0 * std::cos (w);
+            double s1 = 0.0, s2 = 0.0;
+            for (int i = 0; i < kSpecLen; ++i)
+            {
+                const double s0 = (double) x[(size_t) (kSpecFrom + i)] + coeff * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+            return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        };
+
+        auto toneAt = [&] (int length, double aHz, float aAmp, double bHz, float bAmp)
+        {
+            std::vector<float> x ((size_t) length);
+            for (int i = 0; i < length; ++i)
+                x[(size_t) i] = aAmp * (float) std::sin (2.0 * kPi * aHz * (double) i / kUltraSr)
+                              + bAmp * (float) std::sin (2.0 * kPi * bHz * (double) i / kUltraSr);
+            return x;
+        };
+
+        struct UltraRig
+        {
+            std::unique_ptr<ChouchouFFTEQAudioProcessor> p;
+            UltraRig() { p = std::make_unique<ChouchouFFTEQAudioProcessor>(); }
+            void prepare() { p->prepareToPlay (kUltraSr, 512); }
+            std::vector<float> render (const std::vector<float>& in)
+            {
+                const int m = (int) in.size();
+                juce::AudioBuffer<float> buffer (2, m);
+                for (int i = 0; i < m; ++i)
+                {
+                    buffer.setSample (0, i, in[(size_t) i]);
+                    buffer.setSample (1, i, in[(size_t) i]);
+                }
+                juce::MidiBuffer midi;
+                p->processBlock (buffer, midi);
+                std::vector<float> out ((size_t) m);
+                for (int i = 0; i < m; ++i)
+                    out[(size_t) i] = buffer.getSample (0, i);
+                return out;
+            }
+        };
+
+        const auto duo = toneAt (kUltraN, 1000.0, 0.2f, 30000.0, 0.2f);
+        std::cout << "\n[ULTRA] 96 kHz ultrasound matrix\n";
+
+        {
+            UltraRig base;
+            setParam (base.p, "fftOn", 1.0f);
+            setParam (base.p, "fftSize", 2.0f); // 2048
+            setParam (base.p, "mix", 1.0f);
+            base.prepare();
+            const auto dry = base.render (duo);
+
+            UltraRig armedOff;
+            setParam (armedOff.p, "fftOn", 1.0f);
+            setParam (armedOff.p, "fftSize", 2.0f);
+            setParam (armedOff.p, "mix", 1.0f);
+            setParam (armedOff.p, "usOn", 0.0f);
+            setParam (armedOff.p, "usGain", 12.0f);
+            setParam (armedOff.p, "usTilt", 1.0f);
+            setParam (armedOff.p, "usGate", 0.5f);
+            setParam (armedOff.p, "usSolo", 1.0f);
+            armedOff.prepare();
+            const auto stayed = armedOff.render (duo);
+            expect (maxAbsDiff (stayed, dry, kUltraTail) < 0.02,
+                    "usOn off : identite meme avec Gain/Tilt/Gate/Solo armes");
+        }
+
+        {
+            UltraRig base;
+            setParam (base.p, "fftOn", 1.0f);
+            setParam (base.p, "fftSize", 2.0f);
+            setParam (base.p, "mix", 1.0f);
+            setParam (base.p, "usOn", 1.0f);
+            setParam (base.p, "usFloor", 18000.0f);
+            setParam (base.p, "usGain", 0.0f);
+            base.prepare();
+            const auto flat = base.render (duo);
+            const double e1 = goertzelAt (flat, 1000.0);
+            const double e30 = goertzelAt (flat, 30000.0);
+
+            UltraRig up;
+            setParam (up.p, "fftOn", 1.0f);
+            setParam (up.p, "fftSize", 2.0f);
+            setParam (up.p, "mix", 1.0f);
+            setParam (up.p, "usOn", 1.0f);
+            setParam (up.p, "usFloor", 18000.0f);
+            setParam (up.p, "usGain", 12.0f);
+            up.prepare();
+            const auto louder = up.render (duo);
+            expect (goertzelAt (louder, 30000.0) > e30 * 2.0,
+                    "usGain +12 dB monte 30 kHz",
+                    std::to_string (e30) + " -> " + std::to_string (goertzelAt (louder, 30000.0)));
+            expect (std::abs (goertzelAt (louder, 1000.0) - e1) / std::max (e1, 1.0e-12) < 0.25,
+                    "usGain +12 dB laisse 1 kHz stable");
+
+            UltraRig down;
+            setParam (down.p, "fftOn", 1.0f);
+            setParam (down.p, "fftSize", 2.0f);
+            setParam (down.p, "mix", 1.0f);
+            setParam (down.p, "usOn", 1.0f);
+            setParam (down.p, "usFloor", 18000.0f);
+            setParam (down.p, "usGain", -12.0f);
+            down.prepare();
+            const auto quieter = down.render (duo);
+            expect (goertzelAt (quieter, 30000.0) < e30 * 0.5,
+                    "usGain -12 dB baisse 30 kHz");
+            expect (std::abs (goertzelAt (quieter, 1000.0) - e1) / std::max (e1, 1.0e-12) < 0.25,
+                    "usGain -12 dB laisse 1 kHz stable");
+        }
+
+        {
+            UltraRig pos;
+            setParam (pos.p, "fftOn", 1.0f);
+            setParam (pos.p, "fftSize", 2.0f);
+            setParam (pos.p, "mix", 1.0f);
+            setParam (pos.p, "usOn", 1.0f);
+            setParam (pos.p, "usFloor", 18000.0f);
+            setParam (pos.p, "usTilt", 1.0f);
+            pos.prepare();
+            const auto hiTilt = pos.render (duo);
+
+            UltraRig neg;
+            setParam (neg.p, "fftOn", 1.0f);
+            setParam (neg.p, "fftSize", 2.0f);
+            setParam (neg.p, "mix", 1.0f);
+            setParam (neg.p, "usOn", 1.0f);
+            setParam (neg.p, "usFloor", 18000.0f);
+            setParam (neg.p, "usTilt", -1.0f);
+            neg.prepare();
+            const auto loTilt = neg.render (duo);
+            const double rPos = goertzelAt (hiTilt, 40000.0) / std::max (goertzelAt (hiTilt, 20000.0), 1.0e-12);
+            const double rNeg = goertzelAt (loTilt, 40000.0) / std::max (goertzelAt (loTilt, 20000.0), 1.0e-12);
+            expect (rPos > rNeg * 1.2,
+                    "usTilt +1 vs -1 penche la zone ultrason",
+                    std::to_string (rNeg) + " -> " + std::to_string (rPos));
+        }
+
+        {
+            const auto pair = toneAt (kUltraN, 25000.0, 0.35f, 35000.0, 0.03f);
+            UltraRig openG;
+            setParam (openG.p, "fftOn", 1.0f);
+            setParam (openG.p, "fftSize", 2.0f);
+            setParam (openG.p, "mix", 1.0f);
+            setParam (openG.p, "usOn", 1.0f);
+            setParam (openG.p, "usFloor", 18000.0f);
+            setParam (openG.p, "usGate", 0.0f);
+            openG.prepare();
+            const auto open = openG.render (pair);
+
+            UltraRig gated;
+            setParam (gated.p, "fftOn", 1.0f);
+            setParam (gated.p, "fftSize", 2.0f);
+            setParam (gated.p, "mix", 1.0f);
+            setParam (gated.p, "usOn", 1.0f);
+            setParam (gated.p, "usFloor", 18000.0f);
+            setParam (gated.p, "usGate", 0.35f);
+            gated.prepare();
+            const auto closed = gated.render (pair);
+            expect (goertzelAt (closed, 35000.0) < goertzelAt (open, 35000.0) * 0.5,
+                    "usGate attenue le bin ultrason faible");
+            expect (goertzelAt (closed, 25000.0) > goertzelAt (open, 25000.0) * 0.5,
+                    "usGate conserve le bin ultrason fort");
+        }
+
+        {
+            UltraRig solo;
+            setParam (solo.p, "fftOn", 1.0f);
+            setParam (solo.p, "fftSize", 2.0f);
+            setParam (solo.p, "mix", 1.0f);
+            setParam (solo.p, "usOn", 1.0f);
+            setParam (solo.p, "usFloor", 18000.0f);
+            setParam (solo.p, "usSolo", 1.0f);
+            solo.prepare();
+            const auto out = solo.render (duo);
+            expect (goertzelAt (out, 1000.0) < goertzelAt (out, 30000.0) * 0.15,
+                    "usSolo attenue 1 kHz et garde 30 kHz");
+        }
+
+        {
+            UltraRig highFloor;
+            setParam (highFloor.p, "fftOn", 1.0f);
+            setParam (highFloor.p, "fftSize", 2.0f);
+            setParam (highFloor.p, "mix", 1.0f);
+            setParam (highFloor.p, "usOn", 1.0f);
+            setParam (highFloor.p, "usFloor", 35000.0f);
+            setParam (highFloor.p, "usGain", 12.0f);
+            highFloor.prepare();
+            const auto out = highFloor.render (duo);
+
+            UltraRig flat;
+            setParam (flat.p, "fftOn", 1.0f);
+            setParam (flat.p, "fftSize", 2.0f);
+            setParam (flat.p, "mix", 1.0f);
+            setParam (flat.p, "usOn", 1.0f);
+            setParam (flat.p, "usFloor", 35000.0f);
+            setParam (flat.p, "usGain", 0.0f);
+            flat.prepare();
+            const auto base = flat.render (duo);
+            expect (std::abs (goertzelAt (out, 30000.0) - goertzelAt (base, 30000.0))
+                        / std::max (goertzelAt (base, 30000.0), 1.0e-12) < 0.3,
+                    "usFloor 35 kHz : gain ultrason ne touche plus 30 kHz");
+        }
+
+        {
+            UltraRig base;
+            setParam (base.p, "fftOn", 1.0f);
+            setParam (base.p, "fftSize", 2.0f);
+            setParam (base.p, "mix", 1.0f);
+            setParam (base.p, "usOn", 1.0f);
+            setParam (base.p, "usFloor", 18000.0f);
+            setParam (base.p, "usGain", 0.0f);
+            setParam (base.p, "usTilt", 0.0f);
+            setParam (base.p, "usGate", 0.0f);
+            setParam (base.p, "usSolo", 0.0f);
+            base.prepare();
+            const auto flat = base.render (duo);
+
+            UltraRig reset;
+            setParam (reset.p, "fftOn", 1.0f);
+            setParam (reset.p, "fftSize", 2.0f);
+            setParam (reset.p, "mix", 1.0f);
+            setParam (reset.p, "usOn", 1.0f);
+            setParam (reset.p, "usGain", 12.0f);
+            setParam (reset.p, "usTilt", 0.5f);
+            setParam (reset.p, "usGate", 0.2f);
+            setParam (reset.p, "usSolo", 1.0f);
+            setParam (reset.p, "usGain", 0.0f);
+            setParam (reset.p, "usTilt", 0.0f);
+            setParam (reset.p, "usGate", 0.0f);
+            setParam (reset.p, "usSolo", 0.0f);
+            reset.prepare();
+            expect (maxAbsDiff (reset.render (duo), flat, kUltraTail) < 0.02,
+                    "reset params ultrason retrouve l'identite");
+        }
+
+        {
+            UltraRig plain;
+            setParam (plain.p, "fftOn", 0.0f);
+            setParam (plain.p, "experiment", 5.0f);
+            setParam (plain.p, "shift", 0.5f);
+            plain.prepare();
+            const auto dry = plain.render (duo);
+
+            UltraRig offFft;
+            setParam (offFft.p, "fftOn", 0.0f);
+            setParam (offFft.p, "experiment", 5.0f);
+            setParam (offFft.p, "shift", 0.5f);
+            setParam (offFft.p, "usOn", 1.0f);
+            offFft.prepare();
+            expect (maxAbsDiff (offFft.render (duo), dry, kUltraTail) < 0.02,
+                    "5_ultra sans FFT : identite");
+
+            UltraRig moved;
+            setParam (moved.p, "fftOn", 1.0f);
+            setParam (moved.p, "fftSize", 2.0f);
+            setParam (moved.p, "mix", 1.0f);
+            setParam (moved.p, "experiment", 5.0f);
+            setParam (moved.p, "usFloor", 18000.0f);
+            setParam (moved.p, "shift", 0.5f);
+            moved.prepare();
+            const auto changed = moved.render (duo);
+
+            UltraRig unity;
+            setParam (unity.p, "fftOn", 1.0f);
+            setParam (unity.p, "fftSize", 2.0f);
+            setParam (unity.p, "mix", 1.0f);
+            setParam (unity.p, "experiment", 5.0f);
+            setParam (unity.p, "usFloor", 18000.0f);
+            setParam (unity.p, "shift", 1.0f);
+            unity.prepare();
+            const auto same = unity.render (duo);
+
+            UltraRig chain;
+            setParam (chain.p, "fftOn", 1.0f);
+            setParam (chain.p, "fftSize", 2.0f);
+            setParam (chain.p, "mix", 1.0f);
+            setParam (chain.p, "experiment", 0.0f);
+            chain.prepare();
+            const auto base = chain.render (duo);
+
+            expect (maxAbsDiff (changed, base, kUltraTail) > 0.01,
+                    "5_ultra + shift!=1 change le signal HF");
+            expect (maxAbsDiff (same, base, kUltraTail) < 0.05,
+                    "5_ultra + shift=1 proche identite");
+        }
+
+        {
+            UltraRig eq;
+            setParam (eq.p, "eqOn", 1.0f);
+            setParam (eq.p, "bandCount", 1.0f);
+            setParam (eq.p, "b0on", 1.0f);
+            setParam (eq.p, "b0type", 0.0f);
+            setParam (eq.p, "b0freq", 30000.0f);
+            setParam (eq.p, "b0gain", 12.0f);
+            setParam (eq.p, "b0q", 2.0f);
+            eq.prepare();
+            expect (std::abs (eq.p->getAPVTS().getRawParameterValue ("b0freq")->load() - 30000.0f) < 1.0f,
+                    "band freq accepte 30000 Hz");
+            const auto tone30 = toneAt (kUltraN, 30000.0, 0.2f, 1000.0, 0.0f);
+            (void) eq.render (tone30); // bake EQ coeffs via processBlock
+            expect (std::abs (eq.p->responseDb (30000.0)) > 6.0f,
+                    "peak 30 kHz : responseDb non nul",
+                    std::to_string (eq.p->responseDb (30000.0)));
+
+            UltraRig flatEq;
+            setParam (flatEq.p, "eqOn", 1.0f);
+            setParam (flatEq.p, "bandCount", 1.0f);
+            setParam (flatEq.p, "b0on", 1.0f);
+            setParam (flatEq.p, "b0type", 0.0f);
+            setParam (flatEq.p, "b0freq", 30000.0f);
+            setParam (flatEq.p, "b0gain", 0.0f);
+            setParam (flatEq.p, "b0q", 2.0f);
+            flatEq.prepare();
+            const double flatRms = rms (flatEq.render (tone30), kUltraTail);
+            const double boostRms = rms (eq.render (tone30), kUltraTail);
+            expect (boostRms > flatRms * 2.0,
+                    "peak 30 kHz booste le sinus ultrason",
+                    std::to_string (flatRms) + " -> " + std::to_string (boostRms));
+
+            auto* anMin = dynamic_cast<juce::AudioParameterFloat*> (eq.p->getAPVTS().getParameter ("anMin"));
+            auto* anMax = dynamic_cast<juce::AudioParameterFloat*> (eq.p->getAPVTS().getParameter ("anMax"));
+            expect (anMax != nullptr && anMax->getNormalisableRange().end >= 60000.0f,
+                    "anMax range atteint 60 kHz");
+            expect (anMin != nullptr && anMin->getNormalisableRange().start <= 1.0f
+                    && anMin->getNormalisableRange().end >= 1000.0f,
+                    "anMin permet 1 Hz .. >= 1 kHz");
+
+            UltraRig view;
+            setParam (view.p, "anMin", 1000.0f);
+            setParam (view.p, "anMax", 60000.0f);
+            setParam (view.p, "anFreqScale", 1.0f);
+            view.prepare();
+            expect (std::abs (view.p->getAPVTS().getRawParameterValue ("anMin")->load() - 1000.0f) < 1.0f,
+                    "affichage 1 kHz applicable");
+            expect (std::abs (view.p->getAPVTS().getRawParameterValue ("anMax")->load() - 60000.0f) < 1.0f,
+                    "affichage 60 kHz applicable");
+
+            // Edit EQ peak inside 1–60 kHz window (25 kHz)
+            UltraRig edit;
+            setParam (edit.p, "eqOn", 1.0f);
+            setParam (edit.p, "bandCount", 1.0f);
+            setParam (edit.p, "b0on", 1.0f);
+            setParam (edit.p, "b0type", 0.0f);
+            setParam (edit.p, "b0freq", 25000.0f);
+            setParam (edit.p, "b0gain", 12.0f);
+            setParam (edit.p, "b0q", 2.0f);
+            setParam (edit.p, "anMin", 1000.0f);
+            setParam (edit.p, "anMax", 60000.0f);
+            edit.prepare();
+            const auto tone25 = toneAt (kUltraN, 25000.0, 0.2f, 2000.0, 0.0f);
+            UltraRig flat25;
+            setParam (flat25.p, "eqOn", 1.0f);
+            setParam (flat25.p, "bandCount", 1.0f);
+            setParam (flat25.p, "b0on", 1.0f);
+            setParam (flat25.p, "b0freq", 25000.0f);
+            setParam (flat25.p, "b0gain", 0.0f);
+            flat25.prepare();
+            const double flat25Rms = rms (flat25.render (tone25), kUltraTail);
+            const double boost25Rms = rms (edit.render (tone25), kUltraTail);
+            expect (boost25Rms > flat25Rms * 2.0,
+                    "edition peak 25 kHz dans fenetre 1–60 kHz",
+                    std::to_string (flat25Rms) + " -> " + std::to_string (boost25Rms));
+            expect (std::abs (edit.p->responseDb (25000.0)) > 6.0f,
+                    "responseDb editable a 25 kHz");
+        }
+
+        {
+            // Ghost-peak regression: one boost must not mirror above Nyquist.
+            UltraRig one;
+            setParam (one.p, "eqOn", 1.0f);
+            setParam (one.p, "bandCount", 1.0f);
+            setParam (one.p, "b0on", 1.0f);
+            setParam (one.p, "b0type", 0.0f);
+            setParam (one.p, "b0freq", 17000.0f);
+            setParam (one.p, "b0gain", 12.0f);
+            setParam (one.p, "b0q", 2.0f);
+            one.prepare();
+            (void) one.render (toneAt (kUltraN, 17000.0, 0.2f, 1000.0, 0.0f));
+            const float atPeak = one.p->responseDb (17000.0);
+            const float atMirror31k = one.p->responseDb (31000.0);
+            const float at65k = one.p->responseDb (65000.0);
+            const float at85k = one.p->responseDb (85000.0);
+            expect (atPeak > 6.0f, "un boost a 17 kHz a une vraie crete",
+                    std::to_string (atPeak));
+            expect (std::abs (atMirror31k) < 1.0f
+                    && std::abs (at65k) < 0.1f
+                    && std::abs (at85k) < 0.1f,
+                    "pas de pics fantomes au-dessus de Nyquist",
+                    "31k=" + std::to_string (atMirror31k)
+                    + " 65k=" + std::to_string (at65k)
+                    + " 85k=" + std::to_string (at85k));
+        }
     }
 
     std::cout << (gFails == 0 ? "TOUT PASSE\n" : ("ECHECS " + std::to_string (gFails) + "\n"));

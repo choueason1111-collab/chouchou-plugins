@@ -1,7 +1,17 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "PluginScanSupport.h"
 
 #include <cmath>
+
+namespace
+{
+    constexpr const char* kStateTag = "chouchouDelay";
+    constexpr const char* kEchoTag = "ECHO";
+    constexpr const char* kSlotTag = "SLOT";
+    constexpr const char* kInnerStateTag = "STATE";
+    constexpr const char* kPluginListKey = "pluginList";
+}
 
 namespace
 {
@@ -71,6 +81,30 @@ ChouchouDelayAudioProcessor::ChouchouDelayAudioProcessor()
     pMix       = apvts.getRawParameterValue ("mix");
     pTempoMode = apvts.getRawParameterValue ("tempoMode");
 
+    pGateAmt = apvts.getRawParameterValue ("gateAmt");
+    pGateThresh = apvts.getRawParameterValue ("gateThresh");
+    pGateAtk = apvts.getRawParameterValue ("gateAtk");
+    pGateRel = apvts.getRawParameterValue ("gateRel");
+    pGateMix = apvts.getRawParameterValue ("gateMix");
+    pGateMakeup = apvts.getRawParameterValue ("gateMakeup");
+    pGateAutoGain = apvts.getRawParameterValue ("gateAutoGain");
+    pGateFft = apvts.getRawParameterValue ("gateFft");
+
+    pCompLowThresh = apvts.getRawParameterValue ("compLowThresh");
+    pCompUpRatio = apvts.getRawParameterValue ("compUpRatio");
+    pCompBoostAtk = apvts.getRawParameterValue ("compBoostAtk");
+    pCompBoostRel = apvts.getRawParameterValue ("compBoostRel");
+    pCompBoostSpeed = apvts.getRawParameterValue ("compBoostSpeed");
+    pCompHighThresh = apvts.getRawParameterValue ("compHighThresh");
+    pCompDownRatio = apvts.getRawParameterValue ("compDownRatio");
+    pCompGrAtk = apvts.getRawParameterValue ("compGrAtk");
+    pCompGrRel = apvts.getRawParameterValue ("compGrRel");
+    pCompSpeed = apvts.getRawParameterValue ("compSpeed");
+    pCompMix = apvts.getRawParameterValue ("compMix");
+    pCompMakeup = apvts.getRawParameterValue ("compMakeup");
+    pCompAutoGain = apvts.getRawParameterValue ("compAutoGain");
+    pCompFft = apvts.getRawParameterValue ("compFft");
+
     for (int t = 0; t < kMaxEchoes; ++t)
     {
         const int e = t + 1;
@@ -83,16 +117,66 @@ ChouchouDelayAudioProcessor::ChouchouDelayAudioProcessor()
         pRhythm[(size_t) t] = apvts.getRawParameterValue (idRhythm (e));
         pRhythmCount[(size_t) t] = apvts.getRawParameterValue (idRhythmCount (e));
         pTuplet[(size_t) t] = apvts.getRawParameterValue (idTuplet (e));
+        pGateOn[(size_t) t] = apvts.getRawParameterValue (idGateOn (e));
+        pCompOn[(size_t) t] = apvts.getRawParameterValue (idCompOn (e));
+        pInsBypass[(size_t) t] = apvts.getRawParameterValue (idInsBypass (e));
     }
 
     if (! apvts.state.hasProperty ("intervalUnit"))
         apvts.state.setProperty ("intervalUnit", "ms", nullptr);
+
+    juce::addDefaultFormatsToManager (formatManager);
+    {
+        juce::PropertiesFile::Options opt;
+        opt.applicationName = "chouchouDelay";
+        opt.filenameSuffix = "settings";
+        opt.osxLibrarySubFolder = "Application Support";
+        opt.folderName = "chouchou";
+        appProperties.setStorageParameters (opt);
+        if (auto* settings = appProperties.getUserSettings())
+            if (auto saved = settings->getXmlValue (kPluginListKey))
+                pluginList.recreateFromXml (*saved);
+    }
+    prepareChouChouPluginScanning (pluginList);
+    pluginList.addChangeListener (this);
 }
 
 ChouchouDelayAudioProcessor::~ChouchouDelayAudioProcessor()
 {
+    aliveFlag->store (false, std::memory_order_release);
+    pluginList.removeChangeListener (this);
     worker.stopThread (4000);
+    {
+        const juce::ScopedLock sl (insertLock);
+        for (auto& fx : echoFx)
+            releaseInsert (fx.insert);
+    }
     freeAllStores();
+}
+
+int ChouchouDelayAudioProcessor::fftSizeChoiceToOrder (int choiceIndex) noexcept
+{
+    switch (juce::jlimit (0, 3, choiceIndex))
+    {
+        case 0:  return 9;
+        case 1:  return 10;
+        case 3:  return 12;
+        default: return 11;
+    }
+}
+
+bool ChouchouDelayAudioProcessor::isSelfDescription (const juce::PluginDescription& pd)
+{
+    if (pd.name.containsIgnoreCase (JucePlugin_Name))
+        return true;
+    if (pd.fileOrIdentifier.containsIgnoreCase ("chouchouDelay"))
+        return true;
+    if (pd.manufacturerName.containsIgnoreCase (JucePlugin_Manufacturer)
+        && pd.name.containsIgnoreCase ("Delay"))
+        return true;
+    if (pd.uniqueId != 0 && pd.uniqueId == (int) JucePlugin_PluginCode)
+        return true;
+    return false;
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout
@@ -208,7 +292,93 @@ ChouchouDelayAudioProcessor::createLayout (ChouchouDelayAudioProcessor& self)
             juce::ParameterID { idTuplet (e), 1 }, "Echo " + n + " Tuplet",
             juce::StringArray { "Straight", "Triplet", "Quintuplet", "Sextuplet", "Septuplet" },
             0));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { idGateOn (e), 1 }, "Echo " + n + " Gate", false));
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { idCompOn (e), 1 }, "Echo " + n + " Comp", false));
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            juce::ParameterID { idInsBypass (e), 1 }, "Echo " + n + " Insert Bypass", false));
     }
+
+    // Global Gate
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "gateAmt", 1 }, "Gate Amount",
+        juce::NormalisableRange<float> { 0.0f, 100.0f, 0.01f, 0.25f }, 0.8f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "gateThresh", 1 }, "Gate Threshold",
+        juce::NormalisableRange<float> { -120.0f, 12.0f, 0.1f }, -40.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dBFS")));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "gateAtk", 1 }, "Gate Attack",
+        juce::NormalisableRange<float> { 0.0f, 500.0f, 0.01f, 0.35f }, 5.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("ms")));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "gateRel", 1 }, "Gate Release",
+        juce::NormalisableRange<float> { 0.0f, 2000.0f, 0.01f, 0.3f }, 80.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("ms")));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "gateMix", 1 }, "Gate Mix",
+        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 1.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "gateMakeup", 1 }, "Gate Makeup",
+        juce::NormalisableRange<float> { -24.0f, 24.0f, 0.1f }, 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dB")));
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "gateAutoGain", 1 }, "Gate Auto Gain", false));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "gateFft", 1 }, "Gate FFT",
+        juce::StringArray { "512", "1024", "2048", "4096" }, 0));
+
+    // Global Comp
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compLowThresh", 1 }, "Comp Boost Thresh",
+        juce::NormalisableRange<float> { -120.0f, 0.0f, 0.1f }, -40.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dBFS")));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compUpRatio", 1 }, "Comp Boost Ratio",
+        juce::NormalisableRange<float> { 1.0f, 20.0f, 0.01f, 0.4f }, 2.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compBoostAtk", 1 }, "Comp Boost Attack",
+        juce::NormalisableRange<float> { 0.0f, 500.0f, 0.01f, 0.35f }, 5.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("ms")));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compBoostRel", 1 }, "Comp Boost Release",
+        juce::NormalisableRange<float> { 0.0f, 2000.0f, 0.01f, 0.3f }, 80.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("ms")));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compBoostSpeed", 1 }, "Comp Boost Speed",
+        juce::NormalisableRange<float> { 0.0f, 100.0f, 0.1f }, 50.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compHighThresh", 1 }, "Comp Thresh",
+        juce::NormalisableRange<float> { -60.0f, 0.0f, 0.1f }, -12.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dBFS")));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compDownRatio", 1 }, "Comp Ratio",
+        juce::NormalisableRange<float> { 1.0f, 20.0f, 0.01f, 0.4f }, 4.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compGrAtk", 1 }, "Comp Attack",
+        juce::NormalisableRange<float> { 0.0f, 500.0f, 0.01f, 0.35f }, 10.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("ms")));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compGrRel", 1 }, "Comp Release",
+        juce::NormalisableRange<float> { 0.0f, 2000.0f, 0.01f, 0.3f }, 100.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("ms")));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compSpeed", 1 }, "Comp Speed",
+        juce::NormalisableRange<float> { 0.0f, 100.0f, 0.1f }, 50.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compMix", 1 }, "Comp Mix",
+        juce::NormalisableRange<float> { 0.0f, 1.0f, 0.01f }, 1.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "compMakeup", 1 }, "Comp Makeup",
+        juce::NormalisableRange<float> { -24.0f, 24.0f, 0.1f }, 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dB")));
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "compAutoGain", 1 }, "Comp Auto Gain", false));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "compFft", 1 }, "Comp FFT",
+        juce::StringArray { "512", "1024", "2048", "4096" }, 0));
 
     return layout;
 }
@@ -379,7 +549,16 @@ double ChouchouDelayAudioProcessor::getTailLengthSeconds() const
     double maxT = 0.0;
     for (int e = 1; e <= getEchoCount(); ++e)
         maxT = juce::jmax (maxT, getEchoTimeSeconds (e));
-    return maxT + kPitchWindowSeconds;
+    double insertTail = 0.0;
+    {
+        const juce::ScopedLock sl (insertLock);
+        for (int e = 1; e <= getEchoCount(); ++e)
+            if (auto inst = echoFx[(size_t) (e - 1)].insert.instance)
+                if (! echoFx[(size_t) (e - 1)].insert.bypassed)
+                    insertTail = juce::jmax (insertTail, inst->getTailLengthSeconds());
+    }
+    return maxT + kPitchWindowSeconds + insertTail
+         + (double) reportedFxLatency.load() / juce::jmax (1.0, currentSampleRate.load());
 }
 
 //==============================================================================
@@ -515,12 +694,13 @@ void ChouchouDelayAudioProcessor::adoptPendingStore()
 }
 
 //==============================================================================
-void ChouchouDelayAudioProcessor::prepareToPlay (double sampleRate, int)
+void ChouchouDelayAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     worker.stopThread (4000);
     freeAllStores();
 
     currentSampleRate.store (sampleRate > 0.0 ? sampleRate : 48000.0);
+    preparedBlockSize = juce::jmax (16, samplesPerBlock);
     const double sr = currentSampleRate.load();
 
     const int chans = juce::jlimit (1, 2, juce::jmax (getTotalNumInputChannels(), getTotalNumOutputChannels()));
@@ -543,11 +723,142 @@ void ChouchouDelayAudioProcessor::prepareToPlay (double sampleRate, int)
     envPos = envCount = hopFill = envSince = 0;
     hopSum = 0.0f;
 
+    prepareEchoFx (sr, preparedBlockSize, chans);
     worker.startThread();
 }
 
 void ChouchouDelayAudioProcessor::releaseResources()
 {
+    fxPrepared = false;
+}
+
+void ChouchouDelayAudioProcessor::prepareEchoFx (double sr, int blockSize, int numChannels)
+{
+    const int ch = juce::jlimit (1, 2, numChannels);
+    const int gateOrder = fftSizeChoiceToOrder ((int) std::lround (pGateFft->load()));
+    const int compOrder = fftSizeChoiceToOrder ((int) std::lround (pCompFft->load()));
+
+    wetSumBuf.setSize (ch, blockSize, false, false, true);
+    insertScratch.setSize (ch, blockSize, false, false, true);
+
+    for (auto& fx : echoFx)
+    {
+        fx.gate.prepare (sr, gateOrder, ch);
+        fx.comp.prepare (sr, compOrder, ch);
+        fx.buf.setSize (ch, blockSize, false, false, true);
+        fx.buf.clear();
+
+        const juce::ScopedLock sl (insertLock);
+        if (fx.insert.instance != nullptr)
+        {
+            configureInsertBuses (*fx.insert.instance, ch);
+            prepareInsertInstance (*fx.insert.instance, sr, blockSize);
+        }
+    }
+
+    dryDelaySize = 0;
+    dryDelayWrite = 0;
+    dryDelayBuf.setSize (0, 0);
+    fxPrepared = true;
+    updateReportedLatency();
+}
+
+void ChouchouDelayAudioProcessor::applyFxFftSizes()
+{
+    const int gateOrder = fftSizeChoiceToOrder ((int) std::lround (pGateFft->load()));
+    const int compOrder = fftSizeChoiceToOrder ((int) std::lround (pCompFft->load()));
+    bool changed = false;
+    for (auto& fx : echoFx)
+    {
+        const int prevG = fx.gate.getFftSize();
+        const int prevC = fx.comp.getFftSize();
+        fx.gate.setFftOrder (gateOrder);
+        fx.comp.setFftOrder (compOrder);
+        changed = changed || prevG != fx.gate.getFftSize() || prevC != fx.comp.getFftSize();
+    }
+    if (changed)
+        updateReportedLatency();
+}
+
+void ChouchouDelayAudioProcessor::updateReportedLatency()
+{
+    int lat = 0;
+    const int count = getEchoCount();
+    for (int t = 0; t < count; ++t)
+    {
+        if (pGateOn[(size_t) t]->load() > 0.5f)
+            lat = juce::jmax (lat, echoFx[(size_t) t].gate.getLatency());
+        if (pCompOn[(size_t) t]->load() > 0.5f)
+            lat = juce::jmax (lat, echoFx[(size_t) t].comp.getLatency());
+
+        const juce::ScopedLock sl (insertLock);
+        if (echoFx[(size_t) t].insert.instance != nullptr && ! echoFx[(size_t) t].insert.bypassed
+            && pInsBypass[(size_t) t]->load() <= 0.5f)
+            lat = juce::jmax (lat, echoFx[(size_t) t].insert.instance->getLatencySamples());
+    }
+
+    if (lat != dryDelaySize)
+    {
+        dryDelaySize = lat;
+        dryDelayWrite = 0;
+        const int ch = juce::jmax (1, wetSumBuf.getNumChannels());
+        dryDelayBuf.setSize (ch, juce::jmax (1, lat), false, true, true);
+        dryDelayBuf.clear();
+    }
+
+    reportedFxLatency.store (lat);
+    setLatencySamples (lat);
+}
+
+void ChouchouDelayAudioProcessor::processEchoFx (int tapIndex, int numSamples, int numChannels, juce::MidiBuffer& midi)
+{
+    auto& fx = echoFx[(size_t) tapIndex];
+    auto& buf = fx.buf;
+    if (buf.getNumSamples() < numSamples || buf.getNumChannels() < numChannels)
+        buf.setSize (numChannels, numSamples, false, false, true);
+
+    if (pGateOn[(size_t) tapIndex]->load() > 0.5f)
+    {
+        GateParams gp;
+        gp.amount = pGateAmt->load();
+        gp.thresholdDb = pGateThresh->load();
+        gp.attackMs = pGateAtk->load();
+        gp.releaseMs = pGateRel->load();
+        gp.mix = pGateMix->load();
+        gp.makeupDb = pGateMakeup->load();
+        gp.autoGain = pGateAutoGain->load() > 0.5f;
+        fx.gate.process (buf, gp);
+    }
+
+    if (pCompOn[(size_t) tapIndex]->load() > 0.5f)
+    {
+        CompParams cp;
+        cp.boostThreshDb = pCompLowThresh->load();
+        cp.boostRatio = pCompUpRatio->load();
+        cp.boostAtkMs = pCompBoostAtk->load();
+        cp.boostRelMs = pCompBoostRel->load();
+        cp.boostSpeed = pCompBoostSpeed->load();
+        cp.compThreshDb = pCompHighThresh->load();
+        cp.compRatio = pCompDownRatio->load();
+        cp.compAtkMs = pCompGrAtk->load();
+        cp.compRelMs = pCompGrRel->load();
+        cp.compSpeed = pCompSpeed->load();
+        cp.mix = pCompMix->load();
+        cp.makeupDb = pCompMakeup->load();
+        cp.autoGain = pCompAutoGain->load() > 0.5f;
+        fx.comp.process (buf, cp);
+    }
+
+    std::shared_ptr<juce::AudioPluginInstance> insert;
+    bool bypassed = true;
+    {
+        const juce::ScopedLock sl (insertLock);
+        insert = fx.insert.instance;
+        bypassed = fx.insert.bypassed || pInsBypass[(size_t) tapIndex]->load() > 0.5f;
+    }
+
+    if (insert != nullptr && ! bypassed)
+        processHostedInsert (*insert, buf, midi, insertScratch);
 }
 
 bool ChouchouDelayAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -721,8 +1032,9 @@ void ChouchouDelayAudioProcessor::estimateBpm()
     detectedBpm.store (juce::jlimit (30.0f, 300.0f, prev + 0.45f * (bpm - prev)));
 }
 
-void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
+    juce::ignoreUnused (midi);
     juce::ScopedNoDenormals noDenormals;
 
     const int numSamples = buffer.getNumSamples();
@@ -738,10 +1050,25 @@ void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     if (store == nullptr || numSamples == 0 || chans == 0)
         return;
 
+    if (fxPrepared)
+        applyFxFftSizes();
+
     updateTapTargets (*store, false);
     mixSmoothed.setTargetValue (juce::jlimit (0.0f, 1.0f, pMix->load() / 100.0f));
     if (getTempoMode() == 1)
         analyseTempo (buffer.getReadPointer (0), chans > 1 ? buffer.getReadPointer (1) : nullptr, numSamples, chans);
+
+    if (wetSumBuf.getNumChannels() < chans || wetSumBuf.getNumSamples() < numSamples)
+        wetSumBuf.setSize (chans, numSamples, false, false, true);
+    wetSumBuf.clear();
+
+    for (int t = 0; t < kMaxEchoes; ++t)
+    {
+        auto& buf = echoFx[(size_t) t].buf;
+        if (buf.getNumChannels() < chans || buf.getNumSamples() < numSamples)
+            buf.setSize (chans, numSamples, false, false, true);
+        buf.clear();
+    }
 
     float* io[2] = { buffer.getWritePointer (0), chans > 1 ? buffer.getWritePointer (1) : nullptr };
     float* line[2] = { store->ch[0].get(), store->numChannels > 1 ? store->ch[1].get() : store->ch[0].get() };
@@ -750,17 +1077,24 @@ void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     const double maxDelay = (double) len - 4.0;
     int w = (int) (store->written % len);
 
+    // Snapshot dry input (before we overwrite buffer at mix stage)
+    juce::HeapBlock<float> drySnap[2];
+    for (int c = 0; c < chans; ++c)
+    {
+        drySnap[c].allocate ((size_t) numSamples, false);
+        juce::FloatVectorOperations::copy (drySnap[c].get(), io[c], numSamples);
+    }
+
     for (int s = 0; s < numSamples; ++s)
     {
-        float in[2] = { io[0][s], chans > 1 ? io[1][s] : 0.0f };
+        float in[2] = { drySnap[0][s], chans > 1 ? drySnap[1][s] : 0.0f };
         line[0][w] = in[0];
         if (storeCh > 1)
             line[1][w] = chans > 1 ? in[1] : in[0];
 
-        float wet[2] = { 0.0f, 0.0f };
-
-        for (auto& tp : taps)
+        for (int t = 0; t < kMaxEchoes; ++t)
         {
+            auto& tp = taps[(size_t) t];
             if (tp.gainRamp > 0)
             {
                 tp.gain += tp.gainStep;
@@ -777,12 +1111,16 @@ void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
             if (tp.gain == 0.0f)
                 continue;
 
+            float* echoL = echoFx[(size_t) t].buf.getWritePointer (0);
+            float* echoR = chans > 1 ? echoFx[(size_t) t].buf.getWritePointer (1) : nullptr;
             const float panGain[2] = { chans > 1 ? tp.panL : 1.0f, tp.panR };
+
             if (tp.ratio == 1.0)
             {
                 const double d = juce::jlimit (1.0, maxDelay, tp.delay);
-                for (int c = 0; c < chans; ++c)
-                    wet[c] += tp.gain * panGain[c] * readHermite (line[c], len, w, d);
+                echoL[s] += tp.gain * panGain[0] * readHermite (line[0], len, w, d);
+                if (echoR != nullptr)
+                    echoR[s] += tp.gain * panGain[1] * readHermite (line[1], len, w, d);
             }
             else
             {
@@ -794,8 +1132,9 @@ void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                     const double d = juce::jlimit (1.0, maxDelay, tp.delay + (ph[k] - 0.5) * tp.window);
                     const float sn = (float) std::sin (juce::MathConstants<double>::pi * ph[k]);
                     const float hg = tp.gain * sn * sn;
-                    for (int c = 0; c < chans; ++c)
-                        wet[c] += hg * panGain[c] * readHermite (line[c], len, w, d);
+                    echoL[s] += hg * panGain[0] * readHermite (line[0], len, w, d);
+                    if (echoR != nullptr)
+                        echoR[s] += hg * panGain[1] * readHermite (line[1], len, w, d);
                 }
 
                 tp.phase += tp.phaseInc;
@@ -803,6 +1142,45 @@ void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                 else if (tp.phase < 0.0) tp.phase += 1.0;
             }
         }
+
+        if (++w == len)
+            w = 0;
+    }
+
+    store->written += numSamples;
+    publishedWritten.store (store->written, std::memory_order_release);
+
+    const int echoCount = getEchoCount();
+    juce::MidiBuffer emptyMidi;
+    for (int t = 0; t < echoCount; ++t)
+    {
+        const bool needsFx = pGateOn[(size_t) t]->load() > 0.5f
+                          || pCompOn[(size_t) t]->load() > 0.5f
+                          || isEchoInsertLoaded (t + 1);
+        if (needsFx)
+            processEchoFx (t, numSamples, chans, emptyMidi);
+
+        for (int c = 0; c < chans; ++c)
+            wetSumBuf.addFrom (c, 0, echoFx[(size_t) t].buf, c, 0, numSamples);
+    }
+
+    // Align dry with max FX latency when any FX is active
+    const int lat = dryDelaySize;
+    for (int s = 0; s < numSamples; ++s)
+    {
+        float delayedDry[2] {};
+        for (int c = 0; c < chans; ++c)
+        {
+            if (lat > 0 && dryDelayBuf.getNumSamples() >= lat)
+            {
+                delayedDry[c] = dryDelayBuf.getSample (c, dryDelayWrite);
+                dryDelayBuf.setSample (c, dryDelayWrite, drySnap[c][s]);
+            }
+            else
+                delayedDry[c] = drySnap[c][s];
+        }
+        if (lat > 0)
+            dryDelayWrite = (dryDelayWrite + 1) % lat;
 
         const float m = mixSmoothed.getNextValue();
         float dryG, wetG;
@@ -815,14 +1193,8 @@ void ChouchouDelayAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
         }
 
         for (int c = 0; c < chans; ++c)
-            io[c][s] = in[c] * dryG + wet[c] * wetG;
-
-        if (++w == len)
-            w = 0;
+            io[c][s] = delayedDry[c] * dryG + wetSumBuf.getSample (c, s) * wetG;
     }
-
-    store->written += numSamples;
-    publishedWritten.store (store->written, std::memory_order_release);
 }
 
 //==============================================================================
@@ -831,17 +1203,392 @@ juce::AudioProcessorEditor* ChouchouDelayAudioProcessor::createEditor()
     return new ChouchouDelayAudioProcessorEditor (*this);
 }
 
+bool ChouchouDelayAudioProcessor::isEchoGateOn (int echo) const
+{
+    if (echo < 1 || echo > kMaxEchoes) return false;
+    return pGateOn[(size_t) (echo - 1)]->load() > 0.5f;
+}
+
+bool ChouchouDelayAudioProcessor::isEchoCompOn (int echo) const
+{
+    if (echo < 1 || echo > kMaxEchoes) return false;
+    return pCompOn[(size_t) (echo - 1)]->load() > 0.5f;
+}
+
+bool ChouchouDelayAudioProcessor::isEchoInsertBypassed (int echo) const
+{
+    if (echo < 1 || echo > kMaxEchoes) return true;
+    if (pInsBypass[(size_t) (echo - 1)]->load() > 0.5f)
+        return true;
+    const juce::ScopedLock sl (insertLock);
+    return echoFx[(size_t) (echo - 1)].insert.bypassed;
+}
+
+bool ChouchouDelayAudioProcessor::isEchoInsertLoaded (int echo) const
+{
+    if (echo < 1 || echo > kMaxEchoes) return false;
+    const juce::ScopedLock sl (insertLock);
+    return echoFx[(size_t) (echo - 1)].insert.instance != nullptr;
+}
+
+juce::String ChouchouDelayAudioProcessor::getEchoInsertName (int echo) const
+{
+    if (echo < 1 || echo > kMaxEchoes) return {};
+    const juce::ScopedLock sl (insertLock);
+    const auto& slot = echoFx[(size_t) (echo - 1)].insert;
+    if (slot.instance == nullptr)
+        return {};
+    auto name = slot.description.name;
+    if (name.isEmpty())
+        name = slot.instance->getName();
+    return name;
+}
+
+void ChouchouDelayAudioProcessor::releaseInsert (EchoInsertSlot& slot)
+{
+    if (slot.instance != nullptr)
+    {
+        slot.instance->releaseResources();
+        slot.instance.reset();
+    }
+    slot.description = {};
+    slot.bypassed = false;
+}
+
+uint64_t ChouchouDelayAudioProcessor::beginInsertLoad (int echo)
+{
+    auto& slot = echoFx[(size_t) (echo - 1)].insert;
+    slot.loadGeneration = nextLoadId.fetch_add (1, std::memory_order_relaxed);
+    return slot.loadGeneration;
+}
+
+bool ChouchouDelayAudioProcessor::isInsertLoadCurrent (int echo, uint64_t requestId) const
+{
+    return echoFx[(size_t) (echo - 1)].insert.loadGeneration == requestId;
+}
+
+void ChouchouDelayAudioProcessor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    if (auto* settings = appProperties.getUserSettings())
+        if (auto xml = pluginList.createXml())
+            settings->setValue (kPluginListKey, xml.get());
+}
+
+void ChouchouDelayAudioProcessor::setUiStatus (const juce::String& text)
+{
+    const juce::ScopedLock sl (statusLock);
+    uiStatus = text;
+}
+
+juce::String ChouchouDelayAudioProcessor::getUiStatus() const
+{
+    const juce::ScopedLock sl (statusLock);
+    return uiStatus;
+}
+
+void ChouchouDelayAudioProcessor::loadEchoInsertAsync (int echo, const juce::PluginDescription& desc)
+{
+    if (echo < 1 || echo > kMaxEchoes)
+        return;
+    if (isSelfDescription (desc))
+    {
+        setUiStatus ("Cannot load chouchouDelay inside itself.");
+        return;
+    }
+
+    const double sr = currentSampleRate.load() > 0.0 ? currentSampleRate.load() : 44100.0;
+    const int bs = preparedBlockSize > 0 ? preparedBlockSize : 512;
+    uint64_t requestId = 0;
+    {
+        const juce::ScopedLock sl (insertLock);
+        requestId = beginInsertLoad (echo);
+    }
+
+    auto life = aliveFlag;
+    const int echoIndex = echo;
+    formatManager.createPluginInstanceAsync (
+        desc, sr, bs,
+        [life, this, echoIndex, requestId, pluginName = desc.name]
+        (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+        {
+            if (! life->load (std::memory_order_acquire))
+                return;
+            if (error.isNotEmpty() || instance == nullptr)
+            {
+                setUiStatus ("Load failed: " + (error.isNotEmpty() ? error : pluginName));
+                return;
+            }
+            if (! configureInsertBuses (*instance, juce::jmax (1, getMainBusNumOutputChannels())))
+            {
+                setUiStatus ("Load failed: bus config for " + pluginName);
+                return;
+            }
+            auto shared = std::shared_ptr<juce::AudioPluginInstance> (std::move (instance));
+            {
+                const juce::ScopedLock sl (insertLock);
+                if (! isInsertLoadCurrent (echoIndex, requestId))
+                    return;
+                auto& slot = echoFx[(size_t) (echoIndex - 1)].insert;
+                releaseInsert (slot);
+                slot.description = shared->getPluginDescription();
+                slot.instance = std::move (shared);
+                slot.bypassed = false;
+                if (fxPrepared)
+                    prepareInsertInstance (*slot.instance, currentSampleRate.load(), preparedBlockSize);
+            }
+            updateReportedLatency();
+            setUiStatus ("Loaded on echo " + juce::String (echoIndex) + ": " + pluginName);
+        });
+}
+
+bool ChouchouDelayAudioProcessor::loadEchoInsertBlocking (int echo,
+                                                          const juce::PluginDescription& desc,
+                                                          juce::String& error)
+{
+    error.clear();
+    if (echo < 1 || echo > kMaxEchoes)
+    {
+        error = "Invalid echo";
+        return false;
+    }
+    if (isSelfDescription (desc))
+    {
+        error = "Cannot load chouchouDelay inside itself.";
+        return false;
+    }
+
+    const double sr = currentSampleRate.load() > 0.0 ? currentSampleRate.load() : 44100.0;
+    const int bs = preparedBlockSize > 0 ? preparedBlockSize : 512;
+    juce::String createError;
+    auto instance = formatManager.createPluginInstance (desc, sr, bs, createError);
+    if (instance == nullptr)
+    {
+        error = createError.isNotEmpty() ? createError : "createPluginInstance failed";
+        return false;
+    }
+    if (! configureInsertBuses (*instance, juce::jmax (1, getMainBusNumOutputChannels())))
+    {
+        error = "Could not configure plugin buses";
+        return false;
+    }
+    auto shared = std::shared_ptr<juce::AudioPluginInstance> (std::move (instance));
+    {
+        const juce::ScopedLock sl (insertLock);
+        beginInsertLoad (echo);
+        auto& slot = echoFx[(size_t) (echo - 1)].insert;
+        releaseInsert (slot);
+        slot.description = shared->getPluginDescription();
+        slot.instance = std::move (shared);
+        slot.bypassed = false;
+        if (fxPrepared)
+            prepareInsertInstance (*slot.instance, sr, bs);
+    }
+    updateReportedLatency();
+    return true;
+}
+
+void ChouchouDelayAudioProcessor::setEchoInsertForTest (int echo,
+                                                        std::shared_ptr<juce::AudioPluginInstance> instance)
+{
+    if (echo < 1 || echo > kMaxEchoes)
+        return;
+    {
+        const juce::ScopedLock sl (insertLock);
+        beginInsertLoad (echo);
+        auto& slot = echoFx[(size_t) (echo - 1)].insert;
+        releaseInsert (slot);
+        if (instance != nullptr)
+        {
+            configureInsertBuses (*instance, juce::jmax (1, getMainBusNumOutputChannels()));
+            slot.description = instance->getPluginDescription();
+            slot.instance = std::move (instance);
+            slot.bypassed = false;
+            if (fxPrepared)
+                prepareInsertInstance (*slot.instance, currentSampleRate.load(), preparedBlockSize);
+        }
+    }
+    updateReportedLatency();
+}
+
+void ChouchouDelayAudioProcessor::clearEchoInsert (int echo)
+{
+    if (echo < 1 || echo > kMaxEchoes)
+        return;
+    {
+        const juce::ScopedLock sl (insertLock);
+        beginInsertLoad (echo);
+        releaseInsert (echoFx[(size_t) (echo - 1)].insert);
+    }
+    updateReportedLatency();
+}
+
+void ChouchouDelayAudioProcessor::setEchoInsertBypassed (int echo, bool shouldBypass)
+{
+    if (echo < 1 || echo > kMaxEchoes)
+        return;
+    if (auto* p = apvts.getParameter (idInsBypass (echo)))
+        p->setValueNotifyingHost (shouldBypass ? 1.0f : 0.0f);
+    {
+        const juce::ScopedLock sl (insertLock);
+        echoFx[(size_t) (echo - 1)].insert.bypassed = shouldBypass;
+    }
+    updateReportedLatency();
+}
+
+std::unique_ptr<juce::AudioProcessorEditor> ChouchouDelayAudioProcessor::createEchoInsertEditor (int echo)
+{
+    if (echo < 1 || echo > kMaxEchoes)
+        return {};
+    const juce::ScopedLock sl (insertLock);
+    if (auto inst = echoFx[(size_t) (echo - 1)].insert.instance)
+        if (inst->hasEditor())
+            return std::unique_ptr<juce::AudioProcessorEditor> (inst->createEditorAndMakeActive());
+    return {};
+}
+
+std::shared_ptr<juce::AudioPluginInstance> ChouchouDelayAudioProcessor::getEchoInsertShared (int echo) const
+{
+    if (echo < 1 || echo > kMaxEchoes)
+        return {};
+    const juce::ScopedLock sl (insertLock);
+    return echoFx[(size_t) (echo - 1)].insert.instance;
+}
+
 void ChouchouDelayAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml())
-        copyXmlToBinary (*xml, destData);
+    juce::XmlElement root (kStateTag);
+    if (auto params = apvts.copyState().createXml())
+    {
+        params->setTagName ("PARAMS");
+        root.addChildElement (params.release());
+    }
+
+    std::array<std::shared_ptr<juce::AudioPluginInstance>, kMaxEchoes> snap;
+    std::array<juce::PluginDescription, kMaxEchoes> descs;
+    std::array<bool, kMaxEchoes> bypass {};
+    {
+        const juce::ScopedLock sl (insertLock);
+        for (int i = 0; i < kMaxEchoes; ++i)
+        {
+            snap[(size_t) i] = echoFx[(size_t) i].insert.instance;
+            descs[(size_t) i] = echoFx[(size_t) i].insert.description;
+            bypass[(size_t) i] = echoFx[(size_t) i].insert.bypassed;
+        }
+    }
+
+    for (int i = 0; i < kMaxEchoes; ++i)
+    {
+        if (snap[(size_t) i] == nullptr)
+            continue;
+        auto* echoXml = root.createNewChildElement (kEchoTag);
+        echoXml->setAttribute ("index", i + 1);
+        auto* slotXml = echoXml->createNewChildElement (kSlotTag);
+        slotXml->setAttribute ("bypassed", bypass[(size_t) i] ? 1 : 0);
+        auto desc = descs[(size_t) i];
+        if (desc.name.isEmpty())
+            desc = snap[(size_t) i]->getPluginDescription();
+        if (auto descXml = desc.createXml())
+            slotXml->addChildElement (descXml.release());
+        juce::MemoryBlock inner;
+        snap[(size_t) i]->getStateInformation (inner);
+        auto* stateNode = slotXml->createNewChildElement (kInnerStateTag);
+        stateNode->addTextElement (inner.toBase64Encoding());
+    }
+
+    copyXmlToBinary (root, destData);
 }
 
 void ChouchouDelayAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    if (auto xml = getXmlFromBinary (data, sizeInBytes))
-        if (xml->hasTagName (apvts.state.getType()))
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    auto xml = getXmlFromBinary (data, sizeInBytes);
+    if (xml == nullptr)
+        return;
+
+    // Legacy: APVTS-only state
+    if (xml->hasTagName (apvts.state.getType()))
+    {
+        apvts.replaceState (juce::ValueTree::fromXml (*xml));
+        return;
+    }
+
+    if (! xml->hasTagName (kStateTag))
+        return;
+
+    if (auto* params = xml->getChildByName ("PARAMS"))
+        apvts.replaceState (juce::ValueTree::fromXml (*params));
+
+    const uint64_t thisRestore = restoreGeneration.fetch_add (1, std::memory_order_relaxed) + 1;
+    {
+        const juce::ScopedLock sl (insertLock);
+        for (int i = 0; i < kMaxEchoes; ++i)
+        {
+            beginInsertLoad (i + 1);
+            releaseInsert (echoFx[(size_t) i].insert);
+        }
+    }
+    updateReportedLatency();
+
+    const double sr = currentSampleRate.load() > 0.0 ? currentSampleRate.load() : 44100.0;
+    const int bs = preparedBlockSize > 0 ? preparedBlockSize : 512;
+    auto life = aliveFlag;
+
+    for (auto* echoXml : xml->getChildWithTagNameIterator (kEchoTag))
+    {
+        const int echo = echoXml->getIntAttribute ("index", -1);
+        if (echo < 1 || echo > kMaxEchoes)
+            continue;
+        auto* slotXml = echoXml->getChildByName (kSlotTag);
+        if (slotXml == nullptr)
+            continue;
+        const bool bypassed = slotXml->getIntAttribute ("bypassed", 0) != 0;
+        auto* pluginNode = slotXml->getChildByName ("PLUGIN");
+        if (pluginNode == nullptr)
+            continue;
+        juce::PluginDescription pd;
+        if (! pd.loadFromXml (*pluginNode) || isSelfDescription (pd))
+            continue;
+
+        juce::MemoryBlock innerState;
+        if (auto* stateNode = slotXml->getChildByName (kInnerStateTag))
+            innerState.fromBase64Encoding (stateNode->getAllSubText());
+
+        uint64_t requestId = 0;
+        {
+            const juce::ScopedLock sl (insertLock);
+            requestId = beginInsertLoad (echo);
+        }
+
+        formatManager.createPluginInstanceAsync (
+            pd, sr, bs,
+            [life, this, echo, bypassed, innerState, requestId, thisRestore]
+            (std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+            {
+                if (! life->load (std::memory_order_acquire))
+                    return;
+                if (restoreGeneration.load (std::memory_order_relaxed) != thisRestore)
+                    return;
+                if (error.isNotEmpty() || instance == nullptr)
+                    return;
+                if (! configureInsertBuses (*instance, juce::jmax (1, getMainBusNumOutputChannels())))
+                    return;
+                if (! innerState.isEmpty())
+                    instance->setStateInformation (innerState.getData(), (int) innerState.getSize());
+                auto shared = std::shared_ptr<juce::AudioPluginInstance> (std::move (instance));
+                {
+                    const juce::ScopedLock sl (insertLock);
+                    if (! isInsertLoadCurrent (echo, requestId))
+                        return;
+                    auto& slot = echoFx[(size_t) (echo - 1)].insert;
+                    releaseInsert (slot);
+                    slot.description = shared->getPluginDescription();
+                    slot.instance = std::move (shared);
+                    slot.bypassed = bypassed;
+                    if (fxPrepared)
+                        prepareInsertInstance (*slot.instance, currentSampleRate.load(), preparedBlockSize);
+                }
+                updateReportedLatency();
+            });
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

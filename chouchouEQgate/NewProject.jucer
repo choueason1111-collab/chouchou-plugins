@@ -2,7 +2,7 @@
 
 <JUCERPROJECT id="QMvLRI" name="chouchouEQGate2" projectType="audioplug" useAppConfig="0"
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
-              pluginName="chouchouEQGate2" pluginDesc="Spectral expander — strong frequencies stronger, weak weaker"
+              pluginName="chouchouEQGate2" pluginDesc="Spectral gate — weak frequencies attenuated"
               pluginManufacturer="chouchou" pluginManufacturerCode="ChoU"
               pluginCode="cEQ2" pluginVST3Category="Fx,Dynamics" pluginFormats="buildVST3,buildAU,buildStandalone"
               pluginCharacteristicsValue="" companyName="chouchou" companyCode="ChoU"

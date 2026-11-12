@@ -82,9 +82,23 @@ namespace chouchou_delay_ui
         juce::ComboBox rhythmBox, tupletBox;
         juce::Label offsetReadout, infoReadout;
 
-        std::unique_ptr<ButtonAttachment> onAttach;
+        juce::ToggleButton gateOnButton { "Gate" }, compOnButton { "Comp" };
+        juce::Slider gateAmtKnob, gateThreshKnob, compThreshKnob, compRatioKnob;
+        juce::Label gateAmtName, gateThreshName, compThreshName, compRatioName;
+        juce::ToggleButton gateAutoButton { "Gate AG" }, compAutoButton { "Comp AG" };
+        juce::TextButton insertLoadButton { "Insert…" }, insertClearButton { "Clear" }, insertOpenButton { "Open UI" };
+        juce::ToggleButton insertBypassButton { "Ins Bypass" };
+        juce::Label insertNameLabel, fxStatusLabel;
+
+        std::unique_ptr<ButtonAttachment> onAttach, gateOnAttach, compOnAttach, insertBypassAttach;
+        std::unique_ptr<ButtonAttachment> gateAutoAttach, compAutoAttach;
         std::unique_ptr<SliderAttachment> levelAttach, pitchAttach, fineAttach, offsetAttach, panAttach, countAttach;
+        std::unique_ptr<SliderAttachment> gateAmtAttach, gateThreshAttach, compThreshAttach, compRatioAttach;
         std::unique_ptr<ComboAttachment> rhythmAttach, tupletAttach;
+
+        std::unique_ptr<juce::AudioProcessorEditor> insertEditor;
+        std::shared_ptr<juce::AudioPluginInstance> insertKeepAlive;
+        std::unique_ptr<juce::DocumentWindow> insertWindow;
     };
 }
 
